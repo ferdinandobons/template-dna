@@ -354,7 +354,7 @@ def _compose_cover_comprehended(doc, cover: Cover, profile: dict, comp: dict, si
         content = _cover_content_for(cover, binds_to)
 
         if fill_rule == schema.FillRule.IN_PLACE.value and content:
-            _fill_anchor_in_place(doc, el, anchor_ref, content, profile)
+            _fill_anchor_in_place(doc, el, anchor_ref, content, profile, binds_to)
             if binds_to == "title":
                 title_slot_filled = True
             continue
@@ -456,14 +456,41 @@ def _resolve_anchor_element(doc, anchor_ref: str):
     return None
 
 
-def _fill_anchor_in_place(doc, el, anchor_ref: str, content: str, profile: dict) -> None:
-    """FILL a cover anchor element in place, preserving run formatting."""
+def _fill_anchor_in_place(
+    doc, el, anchor_ref: str, content: str, profile: dict, binds_to: Optional[str] = None
+) -> None:
+    """FILL a cover anchor element in place, preserving run formatting.
+
+    After the in-place fill, the slot's bound role style is re-asserted so a filled
+    cover slot is GUARANTEED brand-styled, not merely whatever incidental style the
+    prompt carried (D4). Both the SDT branch and the plain-paragraph branch now
+    re-apply the role style; the role is derived from the slot's ``binds_to``
+    (``title``->``cover.title``, ``subtitle``->``cover.subtitle``), a verbatim
+    resolver target only - no literal.
+    """
     ln = _local_name(el.tag)
+    role_id = _cover_role_for(binds_to)
     if ln == "sdt":
         _fill_sdt_title(el, content)
-        _apply_role_style_sdt(doc, el, profile, "cover.title")
+        if role_id:
+            _apply_role_style_sdt(doc, el, profile, role_id)
     elif ln == "p":
         _fill_p_element_in_place(el, content)
+        if role_id:
+            _apply_role_style_p_element(doc, el, profile, role_id)
+
+
+def _cover_role_for(binds_to: Optional[str]) -> Optional[str]:
+    """Map a slot's ``binds_to`` hint to its cover role id (verbatim, no literal).
+
+    ``title`` -> ``cover.title``; ``subtitle`` -> ``cover.subtitle``. Any other (or
+    absent) binding defaults to ``cover.title`` so a filled, un-annotated slot
+    still re-asserts the cover title style rather than keeping a prompt's incidental
+    style. Returns the role id, or None only when there is nothing to bind.
+    """
+    if binds_to == "subtitle":
+        return "cover.subtitle"
+    return "cover.title"
 
 
 def _clear_is_corroborated(el, confidence: float) -> bool:
@@ -563,7 +590,24 @@ def _apply_role_style(doc, para, profile: dict, role_id: str) -> None:
 
 
 def _apply_role_style_sdt(doc, sdt, profile: dict, role_id: str) -> None:
-    """Apply the cover.title paragraph style to the paragraph(s) inside the SDT."""
+    """Apply a role's paragraph style to the first paragraph inside the SDT."""
+    content = sdt.find(w("sdtContent"))
+    scope = content if content is not None else sdt
+    p = next(iter(scope.iter(w("p"))), None)
+    if p is not None:
+        _apply_role_style_p_element(doc, p, profile, role_id)
+
+
+def _apply_role_style_p_element(doc, p_el, profile: dict, role_id: str) -> None:
+    """Stamp a role's ``w:pStyle`` onto a bare lxml ``w:p`` element.
+
+    The single place cover style re-assertion writes a paragraph style id onto an
+    lxml element (used by both the SDT branch and the plain-paragraph branch, D4).
+    No-op when the role resolves to no shell style or the style has no id, so a
+    missing/absent role never crashes the in-place fill.
+    """
+    if _local_name(p_el.tag) != "p":
+        return
     entry = (profile.get("roles") or {}).get(role_id) or {}
     resolver = entry.get("resolver") or {}
     style = lookup_style(doc, resolver)
@@ -572,19 +616,16 @@ def _apply_role_style_sdt(doc, sdt, profile: dict, role_id: str) -> None:
     style_id = getattr(style, "style_id", None)
     if not style_id:
         return
-    content = sdt.find(w("sdtContent"))
-    scope = content if content is not None else sdt
-    for p in scope.iter(w("p")):
-        pPr = p.find(w("pPr"))
-        if pPr is None:
-            from lxml import etree
+    pPr = p_el.find(w("pPr"))
+    if pPr is None:
+        from lxml import etree
 
-            pPr = etree.SubElement(p, w("pPr"))
-            p.insert(0, pPr)
-        pStyle = pPr.find(w("pStyle"))
-        if pStyle is None:
-            from lxml import etree
+        pPr = etree.SubElement(p_el, w("pPr"))
+        p_el.insert(0, pPr)
+    pStyle = pPr.find(w("pStyle"))
+    if pStyle is None:
+        from lxml import etree
 
-            pStyle = etree.SubElement(pPr, w("pStyle"))
-        pStyle.set(w("val"), style_id)
-        break
+        pStyle = etree.SubElement(pPr, w("pStyle"))
+        pPr.insert(0, pStyle)
+    pStyle.set(w("val"), style_id)

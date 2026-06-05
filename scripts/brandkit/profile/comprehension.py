@@ -116,11 +116,54 @@ def comprehend_input_bundle(profile: dict, *, excerpt_chars: int = 8000) -> dict
         "inventories": inventories,
         "structure": profile.get("structure") or {},
         "anchors": profile.get("anchors") or {},
-        "styles": (catalog.get("styles") if isinstance(catalog, dict) else None) or {},
+        "styles": _catalog_styles(catalog),
     }
 
     excerpt = _collect_excerpt(profile, catalog, excerpt_chars)
     return {"facts": facts, "excerpt": excerpt}
+
+
+def _catalog_styles(catalog: Any) -> dict:
+    """Return the catalog's style inventory under whichever key the extractor used.
+
+    The docx/pptx catalogs write ``styles``; the xlsx catalog writes
+    ``named_styles`` (a flat name list). This shared reader accepts either so
+    ``facts.styles`` is populated for every format - previously it was ``{}`` for
+    every workbook because only the docx/pptx key was read (CC-1 / Q6).
+    """
+    if not isinstance(catalog, dict):
+        return {}
+    styles = catalog.get("styles")
+    if styles:
+        return styles if isinstance(styles, dict) else {"styles": list(styles)}
+    named = catalog.get("named_styles")
+    if named:
+        # A flat name list (xlsx) is surfaced under a stable key so the model can
+        # reason over the brand's named cell styles.
+        return {"named_styles": list(named)}
+    return {}
+
+
+def _cell_excerpt_text(cell: Any) -> Optional[str]:
+    """Extract the most informative text from a non-empty-cell catalog entry.
+
+    Each entry is ``{"address", "data_type", "style", "number_format", ...}`` and
+    MAY carry a textual ``value``/``text`` once the xlsx extractor records it. We
+    prefer the cell's own text; absent that we fall back to its address so the
+    model at least sees which cells are populated (geometry), rather than nothing.
+    """
+    if isinstance(cell, dict):
+        for key in ("text", "value"):
+            v = cell.get(key)
+            if isinstance(v, str) and v:
+                return v
+        addr = cell.get("address")
+        if isinstance(addr, str) and addr:
+            return addr
+        return None
+    if cell:
+        return str(cell)
+    return None
 
 
 def _collect_excerpt(profile: dict, catalog: dict, cap: int) -> list[str]:
@@ -134,9 +177,24 @@ def _collect_excerpt(profile: dict, catalog: dict, cap: int) -> list[str]:
             for t in (slide.get("texts") if isinstance(slide, dict) else None) or []:
                 if t:
                     samples.append(str(t))
+        # Top-level cells (legacy/flat catalog shape).
         for c in catalog.get("non_empty_cells") or []:
-            if c:
-                samples.append(str(c))
+            txt = _cell_excerpt_text(c)
+            if txt:
+                samples.append(txt)
+        # The xlsx catalog nests cells under each sheet; descend so every workbook
+        # yields a real excerpt instead of [] (CC-1 / Q6). Sheets are walked in a
+        # stable order so the cap truncates deterministically.
+        sheets = catalog.get("sheets")
+        if isinstance(sheets, dict):
+            for sheet_name in sorted(sheets):
+                sheet = sheets[sheet_name]
+                if not isinstance(sheet, dict):
+                    continue
+                for c in sheet.get("non_empty_cells") or []:
+                    txt = _cell_excerpt_text(c)
+                    if txt:
+                        samples.append(txt)
     # Length-cap deterministically by truncating the ordered list.
     out: list[str] = []
     total = 0

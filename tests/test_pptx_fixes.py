@@ -828,5 +828,150 @@ class MI7SharedResolverTest(unittest.TestCase):
             self.assertIsNone(pg._layout_for_role(prs, resolver, "cover.title"))
 
 
+_COMPLEX_PPTX = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "complex" / "acme_complex.pptx"
+
+
+class PptxCheapFidelityTest(unittest.TestCase):
+    """Regression coverage for the cheap PPTX fidelity fixes (P1/P4/P5/X7/Q14),
+    grounded on the committed complex fixture (native table + chart + pictures +
+    multi-level lists). Native table/chart/SmartArt WRITERS are deferred; these tests
+    pin the cheap parts + the degradation/survival visibility that backs them."""
+
+    def _branded(self, td: Path) -> Path:
+        template = td / "branded.pptx"
+        _branded_template(template)
+        return template
+
+    def _gen(self, template: Path, idoc: ir.IntermediateDocument, out: Path, findings=None):
+        profile = _extract_profile(template)
+        pg.generate(profile, template, idoc, out, findings=findings)
+        return Presentation(out)
+
+    # P1 - list items become REAL body paragraphs carrying paragraph.level --------
+    def test_list_items_are_real_paragraphs_with_levels(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = self._branded(tp)
+            out = tp / "out.pptx"
+            idoc = ir.IntermediateDocument(blocks=[
+                ir.Heading(level=1, runs=[{"t": "Topics"}]),
+                ir.ListBlock(items=[
+                    ir.ListItem(runs=[{"t": "Topic A"}], level=0, items=[
+                        ir.ListItem(runs=[{"t": "Sub A1"}], level=1),
+                    ]),
+                    ir.ListItem(runs=[{"t": "Topic B"}], level=0),
+                ]),
+            ])
+            res = self._gen(template, idoc, out)
+            topic_slide = next(
+                s for s in res.slides
+                if s.shapes.title and s.shapes.title.text and s.shapes.title.text.startswith("Topics")
+            )
+            body = pg._first_body_placeholder(topic_slide)
+            paras = [(p.text, p.level) for p in body.text_frame.paragraphs]
+            # Each item is its OWN paragraph at its real level - NOT a string-joined
+            # "    • " blob in one paragraph.
+            self.assertIn(("Topic A", 0), paras)
+            self.assertIn(("Sub A1", 1), paras)
+            self.assertIn(("Topic B", 0), paras)
+            # No string-joined bullet glyph / indentation prefix leaked into text.
+            for text, _ in paras:
+                self.assertNotIn("•", text)
+                self.assertFalse(text.startswith("    "))
+
+    # X7 - generate-twice is byte-identical (pinned package modified time) ---------
+    def test_generate_twice_is_byte_identical_on_complex_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            prof = _extract_on_disk(_COMPLEX_PPTX, tp, name="acme")
+            idoc = ir.IntermediateDocument(blocks=[
+                ir.Heading(level=1, runs=[{"t": "Update"}]),
+                ir.Paragraph(runs=[{"t": "Body text."}]),
+            ], cover=ir.Cover(title=[{"t": "Cover"}]))
+            o1 = tp / "o1.pptx"
+            o2 = tp / "o2.pptx"
+            pg.generate(prof, _COMPLEX_PPTX, idoc, o1)
+            pg.generate(prof, _COMPLEX_PPTX, idoc, o2)
+            self.assertEqual(o1.read_bytes(), o2.read_bytes())
+
+    # P5 - typed component inventory in extraction + survival baseline -------------
+    def test_extractor_surfaces_typed_component_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            prof = _extract_on_disk(_COMPLEX_PPTX, tp, name="acme")
+            slides = prof["artifact_catalog"]["slides"]
+            self.assertTrue(all("components" in s for s in slides))
+            totals = {"table": 0, "chart": 0, "picture": 0}
+            for s in slides:
+                for fam, n in s["components"].items():
+                    totals[fam] += n
+            # The fixture ships a native table, a native chart and pictures.
+            self.assertGreaterEqual(totals["table"], 1)
+            self.assertGreaterEqual(totals["chart"], 1)
+            self.assertGreaterEqual(totals["picture"], 1)
+
+    def test_inventory_components_matches_structure_helper(self) -> None:
+        prs = Presentation(_COMPLEX_PPTX)
+        totals = ps.inventory_components(prs)
+        self.assertGreaterEqual(totals["table"], 1)
+        self.assertGreaterEqual(totals["chart"], 1)
+        self.assertGreaterEqual(totals["picture"], 1)
+
+    # Q14 - a flattened native block emits a loud block_degraded WARNING -----------
+    def test_table_flatten_emits_block_degraded(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = self._branded(tp)
+            out = tp / "out.pptx"
+            idoc = ir.IntermediateDocument(blocks=[
+                ir.Heading(level=1, runs=[{"t": "Data"}]),
+                ir.Table(columns=[{"t": "Region"}, {"t": "Rev"}],
+                         rows=[[ir.TableCell(runs=[{"t": "North"}]), ir.TableCell(runs=[{"t": "100"}])]]),
+            ])
+            findings: list[Finding] = []
+            self._gen(template, idoc, out, findings=findings)
+            degraded = [f for f in findings if f.check == "block_degraded"]
+            self.assertTrue(degraded, findings)
+            self.assertTrue(all(f.severity == "WARNING" for f in degraded))
+
+    # CC-3(b) - native component lost from shell -> component_survival WARNING -----
+    def test_component_survival_warns_when_native_table_lost(self) -> None:
+        # The complex shell carries a native table/chart/picture; a deterministic
+        # rebuild that emits only text down-renders them -> survival WARNINGs.
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            prof = _extract_on_disk(_COMPLEX_PPTX, tp, name="acme")
+            idoc = ir.IntermediateDocument(blocks=[
+                ir.Heading(level=1, runs=[{"t": "Text only"}]),
+                ir.Paragraph(runs=[{"t": "No native components here."}]),
+            ])
+            out = tp / "out.pptx"
+            findings: list[Finding] = []
+            pg.generate(prof, _COMPLEX_PPTX, idoc, out, findings=findings)
+            survival = {f.check for f in findings if f.check == "component_survival"}
+            self.assertIn("component_survival", survival)
+            self.assertTrue(all(
+                f.severity == "WARNING" for f in findings if f.check == "component_survival"
+            ))
+
+    # P4 - filled cover placeholder keeps its run formatting (rPr re-assertion) ----
+    def test_cover_fill_preserves_run_formatting(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = self._branded(tp)
+            out = tp / "out.pptx"
+            idoc = ir.IntermediateDocument(
+                blocks=[ir.Heading(level=1, runs=[{"t": "S"}])],
+                cover=ir.Cover(title=[{"t": "Branded Title"}], subtitle=[{"t": "Sub"}]),
+            )
+            res = self._gen(template, idoc, out)
+            cover = next(s for s in res.slides if s.slide_layout.name == "BrandCover")
+            self.assertEqual(cover.shapes.title.text, "Branded Title")
+            # The title text frame has exactly one paragraph with a single run holding
+            # the new text (rPr-preserving fill, not a clobbered text frame).
+            tf = cover.shapes.title.text_frame
+            self.assertEqual(len([p for p in tf.paragraphs]), 1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

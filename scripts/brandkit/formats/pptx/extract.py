@@ -238,13 +238,18 @@ def _artifact_catalog(path: Path, prs: Presentation, parts: list[str], layouts: 
         }
         for master in prs.slide_masters
     ]
+    # Typed native-component inventory per slide (table/chart/picture counts), the
+    # baseline the component-survival check diffs against the output deck so a
+    # down-rendered native object is caught deterministically (plan P5).
+    components = {c["index"]: c["components"] for c in structure.slide_component_inventory(prs)}
     out["slides"] = [
         {
             "layout": slide.slide_layout.name,
             "shape_count": len(slide.shapes),
             "texts": [shape.text[:200] for shape in slide.shapes if hasattr(shape, "text") and shape.text],
+            "components": components.get(i, {"table": 0, "chart": 0, "picture": 0}),
         }
-        for slide in prs.slides
+        for i, slide in enumerate(prs.slides)
     ]
     return out
 

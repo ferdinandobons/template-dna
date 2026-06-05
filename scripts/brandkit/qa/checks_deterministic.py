@@ -339,7 +339,176 @@ def check_no_net_structure_loss(removed_refs: set[str], profile: dict) -> list[F
     return findings
 
 
-def check_docx(path, profile: dict) -> list[Finding]:
+# ---------------------------------------------------------------------------
+# Shell-vs-output structural diffs (catch silent corruption the text scans miss)
+# ---------------------------------------------------------------------------
+def _xlsx_formula_map(path) -> dict[str, str]:
+    """Map ``Sheet!Coord`` -> formula string for every formula cell in a workbook.
+
+    Reads the live file (``data_only=False``) so the comparison reflects what is
+    actually on disk, not a possibly-stale catalog snapshot. Only string cells
+    starting with ``=`` are formulas; iterating ``_cells`` keeps this O(populated)
+    on sparse corporate models.
+    """
+    out: dict[str, str] = {}
+    wb = load_workbook(path, data_only=False)
+    for ws in wb.worksheets:
+        for cell in ws._cells.values():
+            value = cell.value
+            if isinstance(value, str) and value.startswith("="):
+                out[f"{ws.title}!{cell.coordinate}"] = value
+    return out
+
+
+def check_formula_preservation(shell, output, profile: dict) -> list[Finding]:
+    """ERROR on any formula the generation LOST or MUTATED vs the brand shell.
+
+    The brand guarantee for xlsx is that the shell's own formulas are preserved
+    verbatim (only the shell's inputs are refilled, never its formulas). A region
+    fill that overwrites a formula cell is silent data corruption that no text
+    scan can see, so this diffs the shell's ``address->formula`` set against the
+    output's and emits an ERROR for every entry that disappeared or changed.
+
+    Model-free and deterministic. No-ops (returns ``[]``) when either file is
+    absent (e.g. verify time, when there is no output yet) so it is always safe to
+    call from the gate. The extractor's ``artifact_catalog.formulas`` is the same
+    baseline; here we read the live shell so the check stands even if the catalog
+    drifts.
+    """
+    if shell is None or output is None:
+        return []
+    if profile.get("kind") != schema.Kind.XLSX.value:
+        return []
+    try:
+        shell_formulas = _xlsx_formula_map(shell)
+        output_formulas = _xlsx_formula_map(output)
+    except Exception as exc:  # opening a workbook must never crash the gate
+        return [
+            Finding(
+                "formula_preservation",
+                schema.Severity.WARNING.value,
+                f"could not verify formula preservation: {exc}",
+            )
+        ]
+    findings: list[Finding] = []
+    for address in sorted(shell_formulas):
+        shell_formula = shell_formulas[address]
+        out_formula = output_formulas.get(address)
+        if out_formula is None:
+            findings.append(
+                Finding(
+                    "formula_preservation",
+                    schema.Severity.ERROR.value,
+                    f"shell formula at {address} ({shell_formula!r}) was erased in the output",
+                    location=address,
+                )
+            )
+        elif out_formula != shell_formula:
+            findings.append(
+                Finding(
+                    "formula_preservation",
+                    schema.Severity.ERROR.value,
+                    f"shell formula at {address} was mutated: "
+                    f"{shell_formula!r} -> {out_formula!r}",
+                    location=address,
+                )
+            )
+    return findings
+
+
+def _docx_component_counts(path) -> dict[str, int]:
+    # Only count components the generator preserves rather than re-authors. Tables
+    # are a meaningful survival signal (a flattened table is a real defect); raw
+    # list-paragraph counts are NOT compared, because docx generation rewrites the
+    # body from new content, so a different list length is expected, not a loss.
+    doc = Document(path)
+    return {"tables": len(doc.tables)}
+
+
+def _pptx_component_counts(path) -> dict[str, int]:
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    prs = Presentation(path)
+    tables = charts = pictures = 0
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if getattr(shape, "has_table", False):
+                tables += 1
+            if getattr(shape, "has_chart", False):
+                charts += 1
+            if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE:
+                pictures += 1
+    return {"tables": tables, "charts": charts, "pictures": pictures}
+
+
+def _xlsx_component_counts(path) -> dict[str, int]:
+    wb = load_workbook(path, data_only=False)
+    tables = charts = 0
+    for ws in wb.worksheets:
+        try:
+            tables += len(ws.tables)
+        except Exception:
+            pass
+        try:
+            charts += len(ws._charts)
+        except Exception:
+            pass
+    return {"tables": tables, "charts": charts}
+
+
+_COMPONENT_COUNTERS = {
+    schema.Kind.DOCX.value: _docx_component_counts,
+    schema.Kind.PPTX.value: _pptx_component_counts,
+    schema.Kind.XLSX.value: _xlsx_component_counts,
+}
+
+
+def check_component_survival(shell, output, profile: dict) -> list[Finding]:
+    """WARN when a native component present in the shell has no counterpart in the output.
+
+    Catches the silent down-render class (e.g. pptx flattening a native table to
+    text, or a docx list losing its numbering) that no text scan detects: it
+    counts native components (tables/charts/lists/pictures, per format) in the
+    shell and in the output and emits a WARNING for every component family whose
+    output count dropped below the shell's. A WARNING (not ERROR) because some
+    drops are legitimate (the new content genuinely has fewer of a component); the
+    signal is "you may have lost a native object", surfaced rather than silent.
+
+    Model-free, deterministic, no-ops when either file is absent.
+    """
+    if shell is None or output is None:
+        return []
+    counter = _COMPONENT_COUNTERS.get(profile.get("kind"))
+    if counter is None:
+        return []
+    try:
+        shell_counts = counter(shell)
+        output_counts = counter(output)
+    except Exception as exc:  # opening the package must never crash the gate
+        return [
+            Finding(
+                "component_survival",
+                schema.Severity.WARNING.value,
+                f"could not verify component survival: {exc}",
+            )
+        ]
+    findings: list[Finding] = []
+    for family in sorted(shell_counts):
+        before = shell_counts[family]
+        after = output_counts.get(family, 0)
+        if before > 0 and after < before:
+            findings.append(
+                Finding(
+                    "component_survival",
+                    schema.Severity.WARNING.value,
+                    f"native {family} count dropped {before} -> {after} "
+                    f"between shell and output (possible down-render)",
+                )
+            )
+    return findings
+
+
+def check_docx(path, profile: dict, shell=None) -> list[Finding]:
     findings = check_profile(profile)
     doc = Document(path)
     text = "\n".join([p.text for p in doc.paragraphs] + [cell.text for t in doc.tables for row in t.rows for cell in row.cells])
@@ -353,10 +522,11 @@ def check_docx(path, profile: dict) -> list[Finding]:
         )
     findings.extend(check_residual_template_text(text, profile))
     findings.extend(check_no_orphan_cover_placeholder(text, profile))
+    findings.extend(check_component_survival(shell, path, profile))
     return findings
 
 
-def check_pptx(path, profile: dict) -> list[Finding]:
+def check_pptx(path, profile: dict, shell=None) -> list[Finding]:
     findings = check_profile(profile)
     prs = Presentation(path)
     text = "\n".join(shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text"))
@@ -366,10 +536,11 @@ def check_pptx(path, profile: dict) -> list[Finding]:
     # demo/placeholder text, never a fixed phrase (de-literalized).
     findings.extend(check_residual_template_text(text, profile))
     findings.extend(check_no_orphan_cover_placeholder(text, profile))
+    findings.extend(check_component_survival(shell, path, profile))
     return findings
 
 
-def check_xlsx(path, profile: dict) -> list[Finding]:
+def check_xlsx(path, profile: dict, shell=None) -> list[Finding]:
     findings = check_profile(profile)
     wb = load_workbook(path, data_only=False)
     cell_texts: list[str] = []
@@ -384,4 +555,8 @@ def check_xlsx(path, profile: dict) -> list[Finding]:
     text = "\n".join(cell_texts)
     findings.extend(check_residual_template_text(text, profile))
     findings.extend(check_no_orphan_cover_placeholder(text, profile))
+    # Deterministic structural diffs that the text scan above is blind to: a fill
+    # that erased a shell formula, or a native component lost in the output.
+    findings.extend(check_formula_preservation(shell, path, profile))
+    findings.extend(check_component_survival(shell, path, profile))
     return findings

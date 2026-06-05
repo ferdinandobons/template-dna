@@ -37,12 +37,16 @@ def run_qa(
             style lookup) to fold into this report.
     """
     findings = checks_deterministic.check_profile(profile)
+    # The per-format checks also receive the brand ``shell`` so they can run the
+    # shell-vs-output structural diffs (formula preservation, component survival)
+    # that no text scan can detect. ``shell`` is None at verify time (no output to
+    # diff), and those diffs no-op on a missing file, so this is always safe.
     if target is not None and profile.get("kind") == "docx":
-        findings = checks_deterministic.check_docx(target, profile)
+        findings = checks_deterministic.check_docx(target, profile, shell=shell)
     elif target is not None and profile.get("kind") == "pptx":
-        findings = checks_deterministic.check_pptx(target, profile)
+        findings = checks_deterministic.check_pptx(target, profile, shell=shell)
     elif target is not None and profile.get("kind") == "xlsx":
-        findings = checks_deterministic.check_xlsx(target, profile)
+        findings = checks_deterministic.check_xlsx(target, profile, shell=shell)
 
     # Deterministic resolver-target existence check (opens the shell once).
     findings = findings + checks_deterministic.check_resolver_targets(shell, profile)

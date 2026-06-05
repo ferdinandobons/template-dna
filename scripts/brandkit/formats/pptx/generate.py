@@ -31,9 +31,24 @@ Design (off-brand-by-construction, §C3/M6/M7, plan §6 reconcile-not-rebuild):
   opens a new section/slide (its own runs become the title); the blocks that follow
   become that slide's body, preserving lists / tables / quotes / captions /
   callouts as distinct lines. Heading text is never duplicated into the body.
+
+  * List items are written as REAL body-placeholder paragraphs carrying their
+    ``paragraph.level`` (so the layout's own list formatting supplies the bullets and
+    indentation), never a string-joined ``"    • text"`` stand-in. A line's
+    ``indent`` (the IR list level) survives the capacity split and is applied to the
+    written paragraph.
+
+DEFERRED (feature milestone, NOT built here): native PPTX tables (``graphicFrame``/
+``a:tbl`` via ``shapes.add_table``), native charts (``c:chart`` via
+``shapes.add_chart``) and SmartArt. Those blocks are still flattened to body text,
+but each flattening now records a ``block_degraded`` WARNING (symmetric with the
+docx vertical) so a deck that loses a native object is visible in QA rather than
+silently down-rendered. A component-survival check (shell-vs-output native counts)
+backs the same guarantee from the QA side.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -47,6 +62,31 @@ from brandkit.profile import schema, store
 from brandkit.profile.resolver import ProfileResolver
 from brandkit.qa.checks_deterministic import check_no_net_structure_loss
 from brandkit.qa.model import Finding
+
+# A fixed package "modified" timestamp pinned before save so two identical
+# generations are byte-identical (python-pptx stamps ``dcterms:modified`` at save
+# time otherwise - the pptx peer of the xlsx pinned-timestamp idempotency fix). A
+# FORMAT constant, never a brand value.
+from datetime import datetime, timezone
+
+_PINNED_MODIFIED = datetime(2001, 1, 1, tzinfo=timezone.utc)
+
+
+@dataclass
+class BodyLine:
+    """One rendered body line carrying its list ``indent`` (paragraph level).
+
+    Body content is rendered to a list of these (not a flat ``list[str]``) so a
+    list item's level survives the capacity split and reaches the written
+    paragraph as a real ``paragraph.level`` - the layout then supplies the bullet
+    and indentation rather than a string-joined ``"    • "`` prefix.
+    """
+
+    text: str
+    indent: int = 0
+
+    def __len__(self) -> int:  # capacity split measures display width by text length
+        return len(self.text)
 
 
 def generate(
@@ -72,10 +112,21 @@ def generate(
     cover_layout = _layout_for_role(prs, resolver, "cover.title")
     content_layout = _layout_for_role(prs, resolver, "heading.1") or _layout_for_role(prs, resolver, "paragraph")
 
+    shell_components = structure.inventory_components(prs)
+
     if store.comprehension_is_present(profile):
         _generate_reconciled(prs, profile, idoc, cover_layout, content_layout, sink)
     else:
-        _generate_deterministic(prs, profile, idoc, cover_layout, content_layout)
+        _generate_deterministic(prs, profile, idoc, cover_layout, content_layout, sink)
+
+    # Component-survival check (plan CC-3(b)): a native table/chart/picture present
+    # in the shell that has no counterpart in the output is WARNed, so a deck that
+    # loses a native object is visible in QA rather than silently down-rendered.
+    sink.extend(_check_component_survival(shell_components, structure.inventory_components(prs)))
+
+    # Pin the package modified time so two identical generations are byte-identical
+    # (python-pptx stamps ``dcterms:modified`` at save otherwise).
+    prs.core_properties.modified = _PINNED_MODIFIED
 
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -83,10 +134,34 @@ def generate(
     return out
 
 
+def _check_component_survival(before: dict, after: dict) -> list[Finding]:
+    """WARN when a native component family present in the shell vanished in output.
+
+    ``before``/``after`` are ``inventory_components`` totals (``table`` / ``chart``
+    / ``picture`` counts). The check is deterministic and model-free: it fires only
+    when a family that the shell carried drops to zero, so a down-render (a native
+    object flattened to text) is surfaced. A count *decrease* that stays > 0 is not
+    flagged (reconcile legitimately rewrites body slides); a family disappearing
+    entirely is the signal that a component was lost.
+    """
+    findings: list[Finding] = []
+    for family in ("table", "chart", "picture"):
+        if before.get(family, 0) > 0 and after.get(family, 0) == 0:
+            findings.append(
+                Finding(
+                    "component_survival",
+                    schema.Severity.WARNING.value,
+                    f"native {family} present in shell ({before[family]}) is absent "
+                    f"from the output deck (down-rendered to text or dropped)",
+                )
+            )
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Deterministic path (comprehension ABSENT) - today's behavior, byte-identical
 # ---------------------------------------------------------------------------
-def _generate_deterministic(prs, profile: dict, idoc, cover_layout, content_layout) -> None:
+def _generate_deterministic(prs, profile: dict, idoc, cover_layout, content_layout, sink: list) -> None:
     """Blind rebuild: clear all slides, build cover + one content slide per heading.
 
     Unchanged from the pre-comprehension behavior so the model-free CI path stays
@@ -98,14 +173,18 @@ def _generate_deterministic(prs, profile: dict, idoc, cover_layout, content_layo
     # shell offers a layout with a title placeholder.
     if idoc.cover and idoc.cover.title:
         cover_slide = prs.slides.add_slide(cover_layout or content_layout or prs.slide_layouts[0])
-        if cover_slide.shapes.title is not None:
-            cover_slide.shapes.title.text = textutil.runs_to_text(idoc.cover.title)
+        title_ph = cover_slide.shapes.title
+        if title_ph is not None:
+            # Re-assert the cover title placeholder's brand run formatting after the
+            # value write (the pptx peer of the docx/xlsx cover-style re-assertion):
+            # write into the first run keeping its rPr rather than clobbering it.
+            _set_placeholder_text(title_ph, textutil.runs_to_text(idoc.cover.title))
         if idoc.cover.subtitle:
             sub = _subtitle_placeholder(cover_slide)
             if sub is not None:
-                sub.text = textutil.runs_to_text(idoc.cover.subtitle)
+                _set_placeholder_text(sub, textutil.runs_to_text(idoc.cover.subtitle))
 
-    _append_content_slides(prs, profile, idoc, content_layout)
+    _append_content_slides(prs, profile, idoc, content_layout, sink)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +210,7 @@ def _generate_reconciled(prs, profile: dict, idoc, cover_layout, content_layout,
     removed_region_refs = _clear_demo_slides(prs, comp, sink)
 
     # 3) Append the new body content after the kept slides.
-    _append_content_slides(prs, profile, idoc, content_layout)
+    _append_content_slides(prs, profile, idoc, content_layout, sink)
 
     # 4) Regenerate the agenda / section-list index from the NEW headings (the PPTX
     # peer of refreshing the docx outline TOC). No-op when the deck has no section
@@ -346,12 +425,17 @@ def _existing_agenda_slide(prs):
 # ---------------------------------------------------------------------------
 # Shared content-slide builder (both paths append body content the same way)
 # ---------------------------------------------------------------------------
-def _append_content_slides(prs, profile: dict, idoc, content_layout) -> None:
-    """Append one content slide per IR heading-section (capacity-split)."""
+def _append_content_slides(prs, profile: dict, idoc, content_layout, sink: list) -> None:
+    """Append one content slide per IR heading-section (capacity-split).
+
+    Body lines are written as REAL body-placeholder paragraphs (one per line), each
+    carrying its ``BodyLine.indent`` as ``paragraph.level`` so the layout's own list
+    formatting supplies the bullet/indentation - never a string-joined body blob.
+    """
     capacity = _body_capacity(profile)
     layout = content_layout or prs.slide_layouts[0]
     for section in _sections(idoc.blocks):
-        body_lines = _body_lines(section["body"])
+        body_lines = _body_lines(section["body"], sink)
         for page, chunk in enumerate(_split_lines(body_lines, capacity)):
             slide = prs.slides.add_slide(layout)
             title = section["title"]
@@ -361,7 +445,36 @@ def _append_content_slides(prs, profile: dict, idoc, content_layout) -> None:
                 slide.shapes.title.text = title
             body = _first_body_placeholder(slide)
             if body is not None and chunk:
-                body.text = "\n".join(chunk)
+                _write_body_lines(body, chunk)
+
+
+def _write_body_lines(body, lines: list[BodyLine]) -> None:
+    """Write ``lines`` as one body-placeholder paragraph each, applying levels.
+
+    The first line reuses the placeholder's existing first paragraph (keeping its
+    run formatting where present); each subsequent line is a fresh
+    ``text_frame.add_paragraph``. Every paragraph's ``level`` is set from the line's
+    ``indent`` so a list item renders at its real depth and the layout supplies the
+    bullet glyph and indentation.
+    """
+    if not getattr(body, "has_text_frame", False) or not lines:
+        return
+    tf = body.text_frame
+    # Drop any surplus prompt paragraphs so we start from a single clean paragraph.
+    for extra in list(tf.paragraphs[1:]):
+        extra._p.getparent().remove(extra._p)
+    first = tf.paragraphs[0]
+    if first.runs:
+        first.runs[0].text = lines[0].text
+        for r in first.runs[1:]:
+            r.text = ""
+    else:
+        first.text = lines[0].text
+    first.level = max(lines[0].indent, 0)
+    for line in lines[1:]:
+        para = tf.add_paragraph()
+        para.text = line.text
+        para.level = max(line.indent, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -547,15 +660,20 @@ def _sections(blocks: list) -> list[dict]:
     return [s for s in sections if s["title"] or s["body"]]
 
 
-def _body_lines(blocks: list) -> list[str]:
-    """Render the non-heading body blocks of a section to display lines.
+def _body_lines(blocks: list, sink: list) -> list[BodyLine]:
+    """Render the non-heading body blocks of a section to structured body lines.
 
-    Preserves block structure: list items, table rows (tab-joined cells), quotes
-    (with attribution), captions and callouts each become their own line(s). KPI /
-    chart / smartart / image carry a short textual stand-in so they are never
-    silently dropped (full visual fidelity is later-milestone work).
+    Preserves block structure: list items become real ``BodyLine``s carrying their
+    ``indent`` (level) so the layout supplies the bullet; quotes (with attribution),
+    captions and callouts each become their own line(s).
+
+    DEFERRED (feature milestone): tables, charts, KPI, SmartArt and images are still
+    flattened to body text (a table to tab-joined rows, a chart/KPI/image to a short
+    stand-in) because the native PPTX writers are not built yet. Each such flattening
+    records a ``block_degraded`` WARNING on ``sink`` so the down-render is visible in
+    QA (symmetric with the docx vertical), never silent.
     """
-    lines: list[str] = []
+    lines: list[BodyLine] = []
     for block in blocks:
         if isinstance(block, ir.Paragraph):
             _append(lines, textutil.runs_to_text(block.runs))
@@ -577,37 +695,63 @@ def _body_lines(blocks: list) -> list[str]:
                 _append_list_item(lines, item)
         elif isinstance(block, ir.Table):
             _append_table(lines, block)
+            _degrade(sink, "table")
         elif isinstance(block, ir.Kpi):
             for kpi in block.items:
                 parts = [p for p in (kpi.label, kpi.value, kpi.delta) if p]
                 _append(lines, ": ".join(parts) if len(parts) > 1 else (parts[0] if parts else ""))
+            _degrade(sink, "kpi")
         elif isinstance(block, ir.Chart):
             _append(lines, block.title or "")
+            _degrade(sink, "chart")
+        elif isinstance(block, ir.SmartArt):
+            for node in block.nodes:
+                _append(lines, str(node.get("text") or "") if isinstance(node, dict) else str(node))
+            _degrade(sink, "smartart")
         elif isinstance(block, ir.Image):
             _append(lines, textutil.runs_to_text(block.caption) if block.caption else (block.alt or ""))
-        # Divider / SmartArt / Component / Section / Toc carry no body text here.
+            _degrade(sink, "image")
+        # Divider / Component / Section / Toc carry no body text here.
     return lines
 
 
-def _append(lines: list[str], text: str) -> None:
+def _degrade(sink: list, kind: str) -> None:
+    """Record a ``block_degraded`` WARNING for a native block flattened to text.
+
+    Mirrors the docx vertical's loud degradation so a deck that down-renders a
+    native table/chart/SmartArt/KPI/image to a textual stand-in is visible in QA
+    rather than silently lost. The native writers themselves are DEFERRED.
+    """
+    sink.append(
+        Finding(
+            "block_degraded",
+            schema.Severity.WARNING.value,
+            f"{kind!r} block flattened to body text in pptx (native writer deferred)",
+        )
+    )
+
+
+def _append(lines: list[BodyLine], text: str, indent: int = 0) -> None:
     if text:
-        lines.append(text)
+        lines.append(BodyLine(text=text, indent=indent))
 
 
-def _append_list_item(lines: list[str], item) -> None:
+def _append_list_item(lines: list[BodyLine], item) -> None:
     text = textutil.runs_to_text(item.runs)
     if text:
-        lines.append(("    " * max(item.level, 0)) + "• " + text)
+        # Real paragraph level (not a string-joined "    • " prefix): the layout's
+        # own list formatting supplies the bullet glyph and indentation.
+        lines.append(BodyLine(text=text, indent=max(item.level, 0)))
     for sub in item.items:
         _append_list_item(lines, sub)
 
 
-def _append_table(lines: list[str], table) -> None:
+def _append_table(lines: list[BodyLine], table) -> None:
     header = [textutil.runs_to_text([c]) if isinstance(c, dict) else str(c) for c in table.columns]
     if any(header):
-        lines.append("\t".join(header))
+        lines.append(BodyLine(text="\t".join(header)))
     for row in table.rows:
-        lines.append("\t".join(textutil.runs_to_text(cell.runs) for cell in row))
+        lines.append(BodyLine(text="\t".join(textutil.runs_to_text(cell.runs) for cell in row)))
     if table.caption:
         _append(lines, textutil.runs_to_text(table.caption))
 
@@ -615,13 +759,18 @@ def _append_table(lines: list[str], table) -> None:
 # ---------------------------------------------------------------------------
 # Capacity split (within a section only)
 # ---------------------------------------------------------------------------
-def _split_lines(lines: list[str], capacity: int) -> list[list[str]]:
-    """Pack body lines into slide-sized chunks, preserving structure."""
+def _split_lines(lines: list[BodyLine], capacity: int) -> list[list[BodyLine]]:
+    """Pack body lines into slide-sized chunks, preserving structure + indent.
+
+    Each chunk is a list of :class:`BodyLine`, so a list item's ``indent`` (level)
+    survives the split and reaches the written paragraph. An over-capacity single
+    line is word-wrapped into pieces that all keep the original line's ``indent``.
+    """
     if not lines:
         return [[]]
     capacity = max(capacity, 1)
-    chunks: list[list[str]] = []
-    cur: list[str] = []
+    chunks: list[list[BodyLine]] = []
+    cur: list[BodyLine] = []
     cur_len = 0
 
     def flush() -> None:
@@ -649,23 +798,24 @@ def _split_lines(lines: list[str], capacity: int) -> list[list[str]]:
     return chunks or [[]]
 
 
-def _wrap_words(line: str, capacity: int) -> list[str]:
-    """Wrap a single over-capacity line into word-bounded pieces."""
-    pieces: list[str] = []
+def _wrap_words(line: BodyLine, capacity: int) -> list[BodyLine]:
+    """Wrap a single over-capacity line into word-bounded pieces (keeping indent)."""
+    indent = line.indent
+    pieces: list[BodyLine] = []
     cur: list[str] = []
     cur_len = 0
-    for word in line.split():
+    for word in line.text.split():
         add = len(word) + (1 if cur else 0)
         if cur and cur_len + add > capacity:
-            pieces.append(" ".join(cur))
+            pieces.append(BodyLine(text=" ".join(cur), indent=indent))
             cur = [word]
             cur_len = len(word)
         else:
             cur.append(word)
             cur_len += add
     if cur:
-        pieces.append(" ".join(cur))
-    return pieces or [line]
+        pieces.append(BodyLine(text=" ".join(cur), indent=indent))
+    return pieces or [BodyLine(text=line.text, indent=indent)]
 
 
 def _body_capacity(profile: dict) -> int:

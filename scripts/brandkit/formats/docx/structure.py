@@ -679,6 +679,130 @@ def inventory_regions(doc) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Numbering inventory (the list-definition facts list-role nomination binds to).
+#
+# A real bulleted / numbered list in OOXML is a paragraph carrying a
+# ``w:pPr/w:numPr`` that references a ``w:num`` in ``word/numbering.xml`` (which
+# in turn references a ``w:abstractNum`` whose per-level ``w:numFmt`` decides the
+# *family*: ``bullet`` vs decimal/roman/etc. = ``number``). The brand's list
+# PARAGRAPH styles carry their own ``w:numPr`` in the style definition, so a list
+# is authored by applying the style alone - but python-docx's ``add_paragraph``
+# does NOT inherit a style's ``w:numPr`` onto the paragraph, so generation must
+# re-assert ``w:numPr`` explicitly (see ``generate._write_list_items``).
+#
+# These helpers are purely STRUCTURAL and brand-agnostic: the family is read from
+# the ``w:numFmt`` field code, never from a style name. They never raise on a
+# document with no numbering part (a template legitimately may have none).
+# ---------------------------------------------------------------------------
+def _numbering_root(doc):
+    """Return the ``w:numbering`` element of the doc's numbering part, or None.
+
+    A template with no list numbering has no numbering part; that is a legitimate
+    absence (returns None), never an error.
+    """
+    try:
+        part = doc.part.numbering_part
+    except (KeyError, AttributeError, ValueError):
+        return None
+    if part is None:
+        return None
+    return getattr(part, "element", None)
+
+
+def _num_to_abstract(root) -> dict[str, str]:
+    """Map ``w:num/@w:numId`` -> ``w:abstractNumId/@w:val`` for the numbering part."""
+    out: dict[str, str] = {}
+    if root is None:
+        return out
+    for num in root.findall(w("num")):
+        nid = num.get(w("numId"))
+        an = num.find(w("abstractNumId"))
+        if nid is not None and an is not None:
+            val = an.get(w("val"))
+            if val is not None:
+                out[nid] = val
+    return out
+
+
+def _abstract_level_formats(root) -> dict[str, dict[int, str]]:
+    """Map ``abstractNumId`` -> ``{ilvl: numFmt}`` for the numbering part.
+
+    ``numFmt`` is the OOXML field code (``bullet`` / ``decimal`` / ``upperRoman``
+    / ...), language-invariant; it is the structural proof of the list *family*.
+    """
+    out: dict[str, dict[int, str]] = {}
+    if root is None:
+        return out
+    for an in root.findall(w("abstractNum")):
+        aid = an.get(w("abstractNumId"))
+        if aid is None:
+            continue
+        levels: dict[int, str] = {}
+        for lvl in an.findall(w("lvl")):
+            try:
+                ilvl = int(lvl.get(w("ilvl")) or 0)
+            except (TypeError, ValueError):
+                continue
+            nf = lvl.find(w("numFmt"))
+            if nf is not None and nf.get(w("val")):
+                levels[ilvl] = nf.get(w("val"))
+        out[aid] = levels
+    return out
+
+
+def num_family_for(doc, num_id: str, ilvl: int = 0) -> Optional[str]:
+    """Return ``"bullet"`` or ``"number"`` for a ``w:numId`` at level ``ilvl``.
+
+    Resolves ``numId -> abstractNumId -> abstractNum/lvl[ilvl]/numFmt`` and maps
+    the OOXML ``numFmt`` to the engine's two list families: ``bullet`` for the
+    ``bullet`` format, ``number`` for every counted format (decimal, roman,
+    letter, ...). Returns None when the numbering part has no such id/level (so a
+    caller can skip rather than guess). Falls back to level 0's format when the
+    requested ``ilvl`` is not explicitly defined.
+    """
+    root = _numbering_root(doc)
+    if root is None:
+        return None
+    aid = _num_to_abstract(root).get(str(num_id))
+    if aid is None:
+        return None
+    levels = _abstract_level_formats(root).get(aid) or {}
+    fmt = levels.get(ilvl) or levels.get(0)
+    if not fmt:
+        return None
+    return "bullet" if fmt == "bullet" else "number"
+
+
+def style_num_binding(style) -> Optional[tuple[str, int]]:
+    """Return ``(numId, ilvl)`` if a paragraph style's definition carries a
+    ``w:pPr/w:numPr``, else None.
+
+    The ``w:ilvl`` defaults to 0 when the style omits it (the common case for a
+    per-level list style that pins only its ``w:numId``). Reads the style's own
+    XML element; never raises on a style without a ``w:pPr``.
+    """
+    el = getattr(style, "element", None)
+    if el is None:
+        return None
+    pPr = el.find(w("pPr"))
+    if pPr is None:
+        return None
+    numPr = pPr.find(w("numPr"))
+    if numPr is None:
+        return None
+    num = numPr.find(w("numId"))
+    num_id = num.get(w("val")) if num is not None else None
+    if not num_id:
+        return None
+    il = numPr.find(w("ilvl"))
+    try:
+        ilvl = int(il.get(w("ilvl")) or il.get(w("val")) or 0) if il is not None else 0
+    except (TypeError, ValueError):
+        ilvl = 0
+    return (num_id, ilvl)
+
+
+# ---------------------------------------------------------------------------
 # Demo-region detection (purely structural; NO hardcoded marker phrases).
 # ---------------------------------------------------------------------------
 def detect_demo_region(doc) -> dict:

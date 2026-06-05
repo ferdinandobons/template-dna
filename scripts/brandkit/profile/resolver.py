@@ -188,16 +188,3 @@ class ProfileResolver:
         if level > 1 and not schema.supports_role(self.profile, rid):
             rid = schema.role_id("list", family, 1)
         return self.resolve_role(rid, fallback="paragraph")
-
-
-def resolve_block(profile: dict, block: ir.Block, *, strict: bool = False) -> ResolvedOp:
-    return ProfileResolver(profile, strict=strict).resolve_block(block)
-
-
-def resolve_role(profile: dict, role_id: str, *, fallback: Optional[str] = "paragraph", strict: bool = False) -> ResolvedOp:
-    """Module-level convenience: resolve one role against ``profile``.
-
-    Mirrors :func:`resolve_block`; the kind-aware spine both pptx and xlsx route
-    through when they only need a single role (not the docx IR stream).
-    """
-    return ProfileResolver(profile, strict=strict).resolve_role(role_id, fallback=fallback)

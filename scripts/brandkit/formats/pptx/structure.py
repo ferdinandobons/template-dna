@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
 # ---------------------------------------------------------------------------
 # Namespaces. The presentation section list is a Microsoft 2010 extension that
@@ -462,6 +462,66 @@ def detect_skeleton(prs) -> dict:
         })
 
     return {"ordered": True, "skeleton": skeleton}
+
+
+# ---------------------------------------------------------------------------
+# Native-component inventory (typed counts for the survival check; plan P5)
+# ---------------------------------------------------------------------------
+def _slide_component_counts(slide) -> dict:
+    """Count the native components on one slide by typed family.
+
+    Families are structural, language-invariant python-pptx signals:
+      - ``table``: a ``graphicFrame`` carrying an ``a:tbl`` (``shape.has_table``);
+      - ``chart``: a ``graphicFrame`` carrying a ``c:chart`` (``shape.has_chart``);
+      - ``picture``: a PICTURE shape (``shape_type == MSO_SHAPE_TYPE.PICTURE``).
+
+    Placeholder pictures are counted too (a picture placeholder is still a native
+    image). Text placeholders are NOT components - they are the body the generator
+    fills - so they are excluded. The counts back the component-survival check that
+    fires when a native object present in the shell has no counterpart in output.
+    """
+    counts = {"table": 0, "chart": 0, "picture": 0}
+    for shape in slide.shapes:
+        if getattr(shape, "has_table", False):
+            counts["table"] += 1
+        elif getattr(shape, "has_chart", False):
+            counts["chart"] += 1
+        elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+            counts["picture"] += 1
+    return counts
+
+
+def inventory_components(prs) -> dict:
+    """Return the deck-wide native-component totals (``table``/``chart``/``picture``).
+
+    Deterministic and recomputable from the live deck at generate time, so a
+    shell-vs-output diff (the component-survival check) is model-free. The totals are
+    the sum across all slides; a per-slide breakdown is available via
+    :func:`slide_component_inventory` for the extractor catalog.
+    """
+    totals = {"table": 0, "chart": 0, "picture": 0}
+    for slide in prs.slides:
+        for family, n in _slide_component_counts(slide).items():
+            totals[family] += n
+    return totals
+
+
+def slide_component_inventory(prs) -> list[dict]:
+    """Return a per-slide typed native-component inventory (extractor catalog peer).
+
+    One entry per slide (in deck order) ``{"index", "layout", "components":
+    {"table","chart","picture"}}`` - the typed inventory the survival check reads as
+    its shell baseline. A slide with no native object reports all-zero counts (its
+    text placeholders are not components).
+    """
+    out: list[dict] = []
+    for i, slide in enumerate(prs.slides):
+        out.append({
+            "index": i,
+            "layout": slide.slide_layout.name,
+            "components": _slide_component_counts(slide),
+        })
+    return out
 
 
 # ---------------------------------------------------------------------------

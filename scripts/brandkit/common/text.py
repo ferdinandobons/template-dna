@@ -147,11 +147,6 @@ def find_markdown_literals(text: str) -> list[dict]:
     return out
 
 
-def has_markdown_literal(text: str) -> bool:
-    """Return True if ``text`` contains any markdown literal."""
-    return MARKDOWN_LITERAL_RE.search(text or "") is not None
-
-
 # ---------------------------------------------------------------------------
 # Slug / safe filename
 # ---------------------------------------------------------------------------
@@ -268,33 +263,8 @@ NAME_TOKEN_LEXICON: dict[str, frozenset[str]] = {
 # Generic company-name noise tokens are NOT hardcoded here (the noise-token
 # stripper is profile-gated and learned from the template per §5.1.2). This
 # lexicon only ever *adds* weak positive evidence; it never strips.
-
-
-def name_token_score(style_name: str, role_family: str) -> float:
-    """Return 1.0 if any lexicon token for ``role_family`` is in ``style_name``.
-
-    Comparison is case-insensitive substring containment. Returns 0.0 when the
-    role family is unknown or no token matches. This is the raw (pre-weight)
-    name-token signal; the scorer multiplies it by the 0.20 WEAK-PRIOR weight.
-
-    This is a tiebreaker, not a decision: a non-zero score only ever ADDS to a
-    role's evidence and is dominated by any structural signal (builtin style id,
-    field code, placeholder type, named-range geometry). It never gates output -
-    a role won purely on this score is best_effort/low-confidence and is still
-    subject to the deterministic ``resolver_targets_exist`` guard. Returning 0.0
-    here can never *remove* a structurally-established role.
-    """
-    tokens = NAME_TOKEN_LEXICON.get(role_family)
-    if not tokens:
-        return 0.0
-    low = (style_name or "").lower()
-    return 1.0 if any(tok in low for tok in tokens) else 0.0
-
-
-def tokenize_name(style_name: str) -> list[str]:
-    """Split a style display name into lowercased alphanumeric tokens.
-
-    Used by the noise-token frequency analysis (e.g. detecting that a company
-    name token recurs across many style names). Splits on any non-alphanumeric.
-    """
-    return [t for t in re.split(r"[^0-9A-Za-z]+", (style_name or "").lower()) if t]
+#
+# The lexicon is consumed directly by the role-inference scorer (docx
+# ``roles.py`` reads ``NAME_TOKEN_LEXICON`` for substring containment); there is
+# no separate scoring helper here. It remains the engine's WEAKEST signal and a
+# last-resort tiebreaker, never a gate.

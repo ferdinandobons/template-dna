@@ -317,6 +317,223 @@ def inventory_regions(wb) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Component inventories (number formats / named styles / tables / CF / charts /
+# images) - GEOMETRY/structure evidence only, never a brand-name literal. These
+# feed the model's comprehension surface and the validator's survival checks; the
+# workbook round-trips these parts byte-intact, so the gap they close is
+# comprehension-blindness, not loss.
+# ---------------------------------------------------------------------------
+def inventory_number_formats(wb) -> list[dict]:
+    """Surface the distinct cell number-format masks the workbook actually uses.
+
+    Walks every MATERIALIZED cell (sparse-safe) and aggregates each distinct
+    ``number_format`` mask to ``{"format": mask, "count": n, "sample": addr}``,
+    sorted by mask. The trivial ``General`` mask is dropped (it carries no brand
+    intent). Universal: the masks are the author's OWN formatting, not a code-side
+    word list, so this works for any workbook/locale.
+    """
+    counts: dict[str, int] = {}
+    samples: dict[str, str] = {}
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        for cell in ws._cells.values():
+            if cell.value is None:
+                continue
+            fmt = cell.number_format
+            if not fmt or fmt == "General":
+                continue
+            counts[fmt] = counts.get(fmt, 0) + 1
+            samples.setdefault(fmt, f"{ws.title}!{cell.coordinate}")
+    return [
+        {"format": fmt, "count": counts[fmt], "sample": samples[fmt]}
+        for fmt in sorted(counts)
+    ]
+
+
+def inventory_named_styles(wb) -> list[dict]:
+    """Surface each workbook NamedStyle with a structural digest of its props.
+
+    Returns one entry per named cell style::
+
+        {"id": "cell.style.acmetitle", "name": "AcmeTitle",
+         "number_format": "...", "font": {...}, "has_fill": bool,
+         "has_border": bool, "builtin": bool}
+
+    Evidence only - the id derives from the style's OWN name (slugified), never a
+    code word-list, so a ``cell_style`` role can re-assert a present brand style
+    on a cover/region fill and the validator can verify it survived. ``builtin``
+    flags Excel's reserved 'Normal'/builtin styles so a nomination layer can
+    prefer a real brand style over the builtin floor.
+    """
+    out: list[dict] = []
+    for style in getattr(wb, "named_styles", []) or []:
+        name = style if isinstance(style, str) else getattr(style, "name", None)
+        if not name:
+            continue
+        entry: dict[str, Any] = {
+            "id": f"cell.style.{slugify(name).replace('-', '')}",
+            "name": name,
+            "builtin": bool(getattr(style, "builtinId", None) is not None) or name == "Normal",
+        }
+        if not isinstance(style, str):
+            nf = getattr(style, "number_format", None)
+            if nf and nf != "General":
+                entry["number_format"] = nf
+            font = getattr(style, "font", None)
+            if font is not None:
+                color = getattr(getattr(font, "color", None), "rgb", None)
+                entry["font"] = {
+                    "name": getattr(font, "name", None),
+                    "size": getattr(font, "size", None),
+                    "bold": bool(getattr(font, "bold", False)),
+                    "italic": bool(getattr(font, "italic", False)),
+                    "color": color if isinstance(color, str) else None,
+                }
+            fill = getattr(style, "fill", None)
+            entry["has_fill"] = bool(fill is not None and getattr(fill, "patternType", None))
+            border = getattr(style, "border", None)
+            entry["has_border"] = bool(
+                border is not None
+                and any(
+                    getattr(getattr(border, side, None), "style", None)
+                    for side in ("left", "right", "top", "bottom")
+                )
+            )
+        out.append(entry)
+    return out
+
+
+def inventory_table_styles(wb) -> list[dict]:
+    """Surface every native table object's name, ref and applied table style.
+
+    One entry per ``openpyxl`` ``Table`` on any sheet::
+
+        {"name": "AcmeDataTbl", "sheet": "Model", "ref": "A3:G7",
+         "style": "TableStyleMedium2", "show_row_stripes": true, ...}
+
+    These round-trip byte-intact; surfacing them lets the model flag a refilled
+    region that overlaps a table and lets a survival check assert the table was
+    not lost. The style name is the author's data, never matched as a literal.
+    """
+    out: list[dict] = []
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        try:
+            # ``TableList.items()`` yields ``(name, ref_string)``; the Table OBJECTS
+            # (which carry ``tableStyleInfo``) are the ``.values()``.
+            tables = list(ws.tables.values())
+        except Exception:
+            continue
+        for tbl in tables:
+            ref = getattr(tbl, "ref", None)
+            entry: dict[str, Any] = {
+                "name": str(getattr(tbl, "displayName", "") or getattr(tbl, "name", "")),
+                "sheet": sheet,
+                "ref": str(ref) if ref else None,
+            }
+            info = getattr(tbl, "tableStyleInfo", None)
+            if info is not None:
+                entry["style"] = getattr(info, "name", None)
+                entry["show_row_stripes"] = bool(getattr(info, "showRowStripes", False))
+                entry["show_col_stripes"] = bool(getattr(info, "showColumnStripes", False))
+                entry["show_first_column"] = bool(getattr(info, "showFirstColumn", False))
+                entry["show_last_column"] = bool(getattr(info, "showLastColumn", False))
+            out.append(entry)
+    out.sort(key=lambda e: (e["sheet"], e["name"]))
+    return out
+
+
+def inventory_conditional_formatting(wb) -> list[dict]:
+    """Surface each sheet's conditional-formatting rules (sqref + rule types).
+
+    One entry per CF range::
+
+        {"sheet": "Model", "sqref": "B4:E6", "rule_types": ["colorScale"]}
+
+    Lets the model flag a refilled region overlapping a CF range and lets a
+    survival check assert CF was preserved. Rule *type* only - no brand literal.
+    """
+    out: list[dict] = []
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        try:
+            cf = ws.conditional_formatting
+        except Exception:
+            continue
+        for rng in cf:
+            try:
+                sqref = str(getattr(rng, "sqref", rng))
+                rules = list(cf[rng])
+            except Exception:
+                continue
+            rule_types = sorted({r.type for r in rules if getattr(r, "type", None)})
+            out.append({"sheet": sheet, "sqref": sqref, "rule_types": rule_types})
+    out.sort(key=lambda e: (e["sheet"], e["sqref"]))
+    return out
+
+
+def _anchor_cell(anchor) -> Optional[str]:
+    """Return the top-left anchor cell ``A1``-coord of a drawing/chart anchor.
+
+    openpyxl two/one-cell anchors expose ``_from`` with 0-based ``col``/``row``;
+    a plain string anchor is returned verbatim. None when unresolvable.
+    """
+    if isinstance(anchor, str):
+        return anchor
+    frm = getattr(anchor, "_from", None)
+    if frm is None:
+        return None
+    try:
+        from openpyxl.utils import get_column_letter
+
+        return f"{get_column_letter(frm.col + 1)}{frm.row + 1}"
+    except Exception:
+        return None
+
+
+def inventory_charts(wb) -> list[dict]:
+    """Surface each sheet's native charts (type + anchor).
+
+    One entry per chart::
+
+        {"sheet": "Model", "type": "BarChart", "anchor": "I3", "has_title": true}
+
+    A survival check can assert the workbook did not silently drop a chart; the
+    chart type is structural metadata, never matched as a literal.
+    """
+    out: list[dict] = []
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        for chart in getattr(ws, "_charts", []) or []:
+            entry: dict[str, Any] = {"sheet": sheet, "type": type(chart).__name__}
+            cell = _anchor_cell(getattr(chart, "anchor", None))
+            if cell is not None:
+                entry["anchor"] = cell
+            if getattr(chart, "title", None) is not None:
+                entry["has_title"] = True
+            out.append(entry)
+    return out
+
+
+def inventory_images(wb) -> list[dict]:
+    """Surface each sheet's embedded images (drawings).
+
+    One entry per image ``{"sheet": ..., "anchor": <cell>}`` so a survival check
+    can assert a logo/picture was not dropped. No brand literal.
+    """
+    out: list[dict] = []
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        for img in getattr(ws, "_images", []) or []:
+            entry: dict[str, Any] = {"sheet": sheet}
+            cell = _anchor_cell(getattr(img, "anchor", None))
+            if cell is not None:
+                entry["anchor"] = cell
+            out.append(entry)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Ordered skeleton (the profile["structure"] payload; peer of docx)
 # ---------------------------------------------------------------------------
 def detect_skeleton(wb) -> dict:

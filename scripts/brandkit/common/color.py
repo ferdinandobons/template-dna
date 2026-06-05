@@ -15,6 +15,16 @@ It does three jobs:
 3. **Judge** a foreground/background pair with the WCAG 2.x relative-luminance
    contrast ratio. (See :func:`contrast_ratio`.)
 
+STAGED-API NOTE: today only :func:`parse_theme_colors` (and its private helpers)
+has a caller (``docx/extract.py``). The DrawingML transform helpers
+(:func:`apply_transforms` / :func:`apply_tint` / :func:`apply_shade` /
+:func:`apply_lum_mod` / :func:`apply_lum_off` / :func:`resolve_theme_color`) and
+the WCAG contrast helpers (:func:`contrast_ratio` / :func:`meets_wcag`) are
+RESERVED, not yet wired: ``schema.DEFAULT_CONTRAST_MIN`` is stamped into every
+profile but no L0 check feeds these functions, so contrast is NOT enforced. They
+are kept as a coherent, tested staging surface for a future contrast check; do
+not assume they run in the gate.
+
 All hex values exchanged across this module are **6-digit uppercase RRGGBB with
 no leading '#'** - the normal form produced by :func:`normalize_hex`. Inputs may
 be ``#rgb`` / ``#rrggbb`` / ``rrggbb`` / ``RRGGBB`` and are normalized.

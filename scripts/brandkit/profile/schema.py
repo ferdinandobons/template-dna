@@ -34,7 +34,7 @@ from typing import Any, Optional
 # Pinned schema version (semver). Bump MINOR for additive, MAJOR for breaking.
 # ---------------------------------------------------------------------------
 SCHEMA_VERSION: str = "1.2.0"
-SCHEMA_ID: str = "https://office-skills/schema/profile-1.json"
+SCHEMA_ID: str = "https://docu-skills/schema/profile-1.json"
 
 # The comprehension sub-block carries its own independent schema tag so the
 # model-facing contract can evolve without re-versioning the whole envelope.
@@ -229,8 +229,23 @@ DEFAULT_L0_INVARIANTS: tuple[str, ...] = (
     # classify as placeholder/demo. Enforced at generate time by the generators
     # surfacing a finding with this id; listed here so the invariant is declared.
     "no_net_structure_loss",
+    # Shell-vs-output structural diffs the text scans cannot see. Wired into the
+    # per-format checks in ``run_qa`` (which now receives the shell at generate
+    # time): ``formula_preservation`` ERRORs when an xlsx fill erased/mutated a
+    # shell formula; ``component_survival`` WARNs when a native component
+    # (table/chart/list/picture) present in the shell is missing from the output.
+    # Both no-op when there is no output to diff (verify time), so the model-free
+    # CI path is unaffected.
+    "formula_preservation",
+    "component_survival",
 )
 
+# Advisory ONLY (staged, like the removed ``lists_use_named_numbering``): this
+# value is stamped into every profile's ``qa`` block but is NOT enforced by any L0
+# check today (no checker feeds the ``color.contrast_ratio`` helpers a fg/bg pair).
+# It is retained as the declared target a future contrast check would read; do NOT
+# assume the gate enforces contrast until such a check is added to ``run_qa`` and
+# listed in :data:`DEFAULT_L0_INVARIANTS`.
 DEFAULT_CONTRAST_MIN: float = 4.5
 
 
@@ -760,7 +775,9 @@ def _validate_comprehension(comp: Any) -> list[str]:
 
     sha = comp.get("source_shell_sha256")
     if sha is not None and not isinstance(sha, str):
-        problems.append(f"comprehension.source_shell_sha256: must be a hex string or null")
+        problems.append(
+            f"comprehension.source_shell_sha256: must be a hex string or null, got {sha!r}"
+        )
 
     # cover_slots: { <anchor_ref>: { fill_rule, binds_to?, semantic_role?, ... } }
     slots = comp.get("cover_slots")

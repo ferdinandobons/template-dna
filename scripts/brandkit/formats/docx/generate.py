@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from brandkit.common import text as textutil
 from brandkit.formats.docx import cover, structure
@@ -247,19 +249,63 @@ def _write_block(doc, profile: dict, resolver: ProfileResolver, block: ir.Block,
 
 def _write_list_items(doc, resolver, block, items, findings) -> None:
     """Write a list depth-first, one paragraph per item, threading each item's
-    level into the resolver so nested items get their level-specific list role."""
+    level into the resolver so nested items get their level-specific list role.
+
+    Applies the resolved list PARAGRAPH style AND re-asserts the numbering
+    (``w:pPr/w:numPr``) on each item (D1): a style's own ``w:numPr`` is not
+    inherited onto a python-docx ``add_paragraph``, so without this the list would
+    render as flat un-numbered paragraphs. The ``numId`` is the verbatim id the
+    role nominated from the document's numbering part; the ``ilvl`` follows the
+    item's actual nesting level so deeper items indent under the same definition.
+    """
     for item in items:
         op = resolver.resolve_list_item(block, item)
         para = doc.add_paragraph(textutil.runs_to_text(item.runs))
         _apply_resolved_style(doc, para, op, findings)
+        _apply_list_numbering(para, op, item)
         if item.items:
             _write_list_items(doc, resolver, block, item.items, findings)
 
 
+def _apply_list_numbering(para, op, item) -> None:
+    """Write ``w:pPr/w:numPr`` (numId + ilvl) on a list paragraph from a resolved
+    list role that carries a verbatim ``num_id``.
+
+    No-op when the role carries no ``num_id`` (e.g. a ``Normal``-floor list with no
+    real numbering definition, or a non-list role) - the paragraph then keeps only
+    its style, exactly as before. The ``ilvl`` is the item's own nesting level so a
+    nested item indents correctly even when its role fell back to the level-1
+    list role.
+    """
+    resolver = op.resolver or {}
+    num_id = resolver.get("num_id")
+    if not num_id:
+        return
+    try:
+        num_id_int = int(num_id)
+    except (TypeError, ValueError):
+        return
+    ilvl = max(0, int(getattr(item, "level", 0) or 0))
+    pPr = para._p.get_or_add_pPr()
+    # Remove any inherited/duplicate numPr first so re-runs stay idempotent.
+    for existing in pPr.findall(qn("w:numPr")):
+        pPr.remove(existing)
+    numPr = OxmlElement("w:numPr")
+    ilvl_el = OxmlElement("w:ilvl")
+    ilvl_el.set(qn("w:val"), str(ilvl))
+    num_el = OxmlElement("w:numId")
+    num_el.set(qn("w:val"), str(num_id_int))
+    numPr.append(ilvl_el)
+    numPr.append(num_el)
+    pPr.append(numPr)
+
+
 def _write_table(doc, resolver, block, findings) -> None:
     # Honor colspan/rowspan: size the grid by span-expanded width, then merge.
+    # Header cells are a flat run list (one column each), so the header width is
+    # simply the column count.
     body_widths = [sum(max(1, c.colspan) for c in row) for row in block.rows]
-    header_width = sum(max(1, _col_span(c)) for c in block.columns)
+    header_width = len(block.columns)
     cols = max([header_width] + body_widths + [1])
     rows = len(block.rows) + (1 if block.columns else 0)
     table = doc.add_table(rows=rows, cols=cols)
@@ -302,10 +348,6 @@ def _fill_row(doc, table, r_idx, cells, header_op, findings, *, force_header=Fal
 def _as_cell(run):
     """Wrap a header-row run (a plain run dict) in a TableCell-like shim."""
     return ir.TableCell(runs=[run])
-
-
-def _col_span(run) -> int:
-    return 1
 
 
 def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:

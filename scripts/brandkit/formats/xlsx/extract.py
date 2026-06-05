@@ -39,14 +39,24 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
     regions = xlsx_structure.inventory_regions(wb)
     skeleton = xlsx_structure.detect_skeleton(wb)
 
-    roles = _roles(named_regions)
+    named_styles = xlsx_structure.inventory_named_styles(wb)
+    number_formats = xlsx_structure.inventory_number_formats(wb)
+    table_styles = xlsx_structure.inventory_table_styles(wb)
+    conditional_formatting = xlsx_structure.inventory_conditional_formatting(wb)
+    charts = xlsx_structure.inventory_charts(wb)
+    images = xlsx_structure.inventory_images(wb)
+
+    roles = _roles(named_regions, named_styles)
     surface = {
         "xlsx": {
             "sheets": wb.sheetnames,
             "named_regions": named_regions,
-            "named_styles": [style if isinstance(style, str) else style.name for style in wb.named_styles],
-            "number_formats": [],
-            "table_styles": [],
+            "named_styles": named_styles,
+            "number_formats": number_formats,
+            "table_styles": table_styles,
+            "conditional_formatting": conditional_formatting,
+            "charts": charts,
+            "images": images,
             "cover_anchors": cover_anchors,
             "fields": fields,
             "regions": regions,
@@ -81,18 +91,24 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
     return store.save_profile(target, profile, template_path.read_bytes(), extra_files={"PROFILE.md": _profile_md(profile)}, overwrite=True)
 
 
-def _roles(named_regions: dict) -> dict:
-    """Build the role registry from the named ranges - GENERICALLY (no literals).
+def _roles(named_regions: dict, named_styles: list[dict] | None = None) -> dict:
+    """Build the role registry from the named ranges + named cell styles (no literals).
 
     Every named range becomes a ``named_range`` role keyed by its slugified name;
     none is privileged by a hardcoded name. Whether a region is a cover title, a
     data block, or something else is the comprehension model's call
-    (``cover_slots`` / ``demo_classification``), never a code-side word. When the
-    workbook declares no named range at all, a single default ``cell_style`` role
-    keeps the registry non-empty so generation has a fallback.
-    """
-    from brandkit.common.text import slugify
+    (``cover_slots`` / ``demo_classification``), never a code-side word.
 
+    Additionally, every PRESENT non-builtin brand cell style is promoted into a
+    ``cell_style`` role with a VERBATIM resolver target (its own style name), so a
+    cover/region fill can re-assert the brand style and the validator can verify it
+    survived - a structural nomination (the style is in the workbook), never a name
+    lexicon match (CC-2 / X3). Builtin styles (Normal/...) are not nominated.
+
+    When the workbook declares no named range AND no brand style at all, a single
+    default ``cell_style`` role keeps the registry non-empty so generation has a
+    fallback.
+    """
     roles = {"_index": []}
 
     def add(rid: str, resolver: dict, signal: str) -> None:
@@ -106,9 +122,25 @@ def _roles(named_regions: dict) -> dict:
         }
         roles["_index"].append(rid)
 
+    # Region role ids derive from the SAME helper the structure inventory uses, so
+    # a role id and its inventory id can never drift (the binding depends on them
+    # agreeing) - Q7.
     for name in sorted(named_regions):
-        rid = f"region.{slugify(name).replace('-', '')}"
+        rid = xlsx_structure.region_id_for_name(name)
         add(rid, {"type": schema.ResolverType.NAMED_RANGE.value, "name": name}, f"named range {name}")
+
+    # Promote present brand cell styles into cell_style roles (structural; the id +
+    # resolver target are the style's OWN name). The inventory already computes the
+    # canonical id and flags builtins, so reuse it (no inline slug duplication).
+    for style in sorted(named_styles or [], key=lambda s: s.get("name") or ""):
+        name = style.get("name")
+        if not name or style.get("builtin"):
+            continue
+        rid = style.get("id")
+        if not rid:
+            continue
+        add(rid, {"type": schema.ResolverType.CELL_STYLE.value, "style_name": name}, f"named cell style {name}")
+
     if not roles["_index"]:
         add("cell.default", {"type": schema.ResolverType.CELL_STYLE.value, "style_name": "Normal"}, "default style")
     return roles
@@ -141,18 +173,31 @@ def _artifact_catalog(path: Path, wb, named_regions: dict, parts: list[str]) -> 
                 continue
             address = f"{ws.title}!{cell.coordinate}"
             value = cell.value
-            if isinstance(value, str) and value.startswith("="):
+            is_formula = isinstance(value, str) and value.startswith("=")
+            if is_formula:
                 formulas[address] = value
-            sheet_info["non_empty_cells"].append(
-                {
-                    "address": address,
-                    "data_type": cell.data_type,
-                    "style": cell.style,
-                    "number_format": cell.number_format,
-                }
-            )
+            entry = {
+                "address": address,
+                "data_type": cell.data_type,
+                "style": cell.style,
+                "number_format": cell.number_format,
+            }
+            # Carry the cell's literal TEXT (only non-formula strings) so the shared
+            # comprehension excerpt collector has real text to sample for xlsx -
+            # without it the model would reason over geometry alone (CC-1). A
+            # formula / number / date is not surfaced as excerpt text (the formula
+            # catalog already records formulas; numerics carry no brand wording).
+            if isinstance(value, str) and not is_formula:
+                entry["text"] = value
+            sheet_info["non_empty_cells"].append(entry)
         out["sheets"][ws.title] = sheet_info
     out["formulas"] = formulas
+    # Native-component baselines for the QA component-survival check: the workbook
+    # round-trips these byte-intact, so a mismatch shell-vs-output is a regression.
+    out["tables"] = xlsx_structure.inventory_table_styles(wb)
+    out["conditional_formatting"] = xlsx_structure.inventory_conditional_formatting(wb)
+    out["charts"] = xlsx_structure.inventory_charts(wb)
+    out["images"] = xlsx_structure.inventory_images(wb)
     return out
 
 
