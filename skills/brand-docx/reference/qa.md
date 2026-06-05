@@ -7,4 +7,17 @@ M1 implements deterministic L0 checks:
 - no literal markdown leaks into generated text
 - no detected demo instruction text remains in generated output
 
-Visual QA is staged for later milestones and degrades gracefully.
+On top of L0, a two-stage visual audit runs when renderers are present and the
+QA mode asks for it:
+
+- **L1** — deterministic pixel proxies on the rendered PNGs (`visual.blank_page`,
+  `visual.edge_bleed`, `visual.no_pages`), each a WARNING that never fails the
+  gate by itself.
+- **L2** — a `visual_manifest.json` (PNG paths + a profile-derived checklist) the
+  orchestrator reads to make the qualitative judgement and drive a repair loop.
+  The engine never calls a model.
+
+It is gated by `--qa` (`fast` = L0 only; `auto` = L0 + L1; `deep` = L0 + L1 +
+manifest) and degrades gracefully when `soffice`/`pdftoppm` are absent (L0 plus a
+single INFO `visual.unavailable`, exit code unchanged). See
+[visual-audit.md](visual-audit.md).

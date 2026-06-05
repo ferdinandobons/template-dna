@@ -21,6 +21,8 @@ def print_report() -> None:
         print(f"python:{name}: {'ok' if ok else 'missing'}")
     for name, ok in status["binaries"].items():
         print(f"binary:{name}: {'ok' if ok else 'missing'} ({OPTIONAL_BINARIES[name]})")
-    if not status["visual_qa"]:
+    if status["visual_qa"]:
+        print("visual QA: L1 proxy + L2 manifest available")
+    else:
         print("visual QA disabled; L0 deterministic QA remains available")
 

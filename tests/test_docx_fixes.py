@@ -275,7 +275,7 @@ class LiteralMarkdownGateTest(unittest.TestCase):
             d.add_paragraph("This has **bold** literal markdown that leaked.")
             d.save(out)
             prof = _docx_profile({"_index": []})
-            report = run_qa(out, prof, mode="generate")
+            report = run_qa(out, prof, mode="generate", qa="fast")
             self.assertEqual(report.verdict, schema.VerificationStatus.FAILED.value)
             self.assertTrue(
                 any(

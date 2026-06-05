@@ -143,7 +143,7 @@ class FormulaPreservationCheckTest(unittest.TestCase):
                     if isinstance(cell.value, str) and cell.value.startswith("="):
                         cell.value = None
             wb.save(out)
-            report = run_qa(str(out), loaded.profile, mode="generate", shell=loaded.shell_path)
+            report = run_qa(str(out), loaded.profile, mode="generate", qa="fast", shell=loaded.shell_path)
             self.assertEqual(report.verdict, schema.VerificationStatus.FAILED.value)
             self.assertTrue(
                 any(f.check == "formula_preservation" for f in report.findings),
@@ -156,7 +156,7 @@ class FormulaPreservationCheckTest(unittest.TestCase):
             loaded = _extract_xlsx(td)
             out = td / "faithful.xlsx"
             shutil.copyfile(loaded.shell_path, out)
-            report = run_qa(str(out), loaded.profile, mode="generate", shell=loaded.shell_path)
+            report = run_qa(str(out), loaded.profile, mode="generate", qa="fast", shell=loaded.shell_path)
             self.assertFalse(
                 [f for f in report.findings if f.check == "formula_preservation"],
                 "a verbatim copy must raise no formula_preservation finding",

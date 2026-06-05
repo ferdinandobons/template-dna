@@ -121,12 +121,20 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"ERROR generate: {exc}")
             return 1
+        from brandkit.qa import visual as vqa
+        visual_dir = vqa.default_out_dir(args.output)
         report = run_qa(
             out, loaded.profile, mode="generate", qa=args.qa,
             shell=loaded.shell_path, extra_findings=gen_findings,
+            out_dir=visual_dir,
         )
         for finding in report.findings:
             print(f"{finding.severity} {finding.check}: {finding.message}")
+        # Surface the manifest path on stdout so the orchestrator can read it
+        # deterministically and run the L2 visual-audit step.
+        manifest_findings = [f for f in report.findings if f.check == "visual.manifest"]
+        if manifest_findings:
+            print(f"visual manifest: {manifest_findings[0].location}")
         print(f"generated {out}")
         return 0 if report.passed else 1
     if args.cmd == "comprehend-input":
