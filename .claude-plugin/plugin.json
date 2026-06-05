@@ -1,0 +1,9 @@
+{
+  "name": "template-dna",
+  "description": "Extract a company's brand from a Word/PowerPoint/Excel template into a reusable Brand Profile, then generate new on-brand documents from it. Three skills: brand-docx, brand-pptx, brand-xlsx.",
+  "version": "0.1.0",
+  "author": { "name": "Ferdinando Bonsegna" },
+  "license": "MIT",
+  "keywords": ["brand", "template", "docx", "pptx", "xlsx", "ooxml", "brand-kit", "claude-code", "agent-skill"],
+  "skills": ["./skills/brand-docx", "./skills/brand-pptx", "./skills/brand-xlsx"]
+}

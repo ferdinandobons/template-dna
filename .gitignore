@@ -1,0 +1,13 @@
+.venv/
+.DS_Store
+__pycache__/
+*.pyc
+.cache/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+# generated test artifacts
+tests/_out/
+brand-kit/*/.cache/
+brand-kit/
+generated/

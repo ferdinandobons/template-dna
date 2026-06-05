@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: MIT
+"""DOCX role inference for the M1 vertical slice."""
+from __future__ import annotations
+
+from typing import Iterable
+
+from docx.enum.style import WD_STYLE_TYPE
+
+from brandkit.common import text as textutil
+from brandkit.profile import schema
+
+
+def _style_id(style) -> str:
+    return getattr(style, "style_id", None) or style.name
+
+
+def role_usage(role_id: str) -> dict:
+    """Derive the per-artifact ``usage`` annotation from a role id.
+
+    Brand-agnostic and evidence-driven (uses the *family* of the role id, which is
+    already inferred from style placement / OOXML, never a brand-specific name):
+
+      - ``cover.*``          -> scope=cover, structural, required, order=0
+      - ``toc``              -> scope=toc,   structural, required, order=1
+      - everything else      -> scope=body,  freeform,   not required, order=null
+
+    ``placement="structural"`` means the artifact is part of the ordered skeleton
+    and must appear in its slot; ``placement="freeform"`` means it is used on demand
+    inside the freeform body region.
+    """
+    family, _ = schema.parse_role_id(role_id)
+    if family == "cover":
+        return {"scope": "cover", "placement": "structural", "required": True, "order": 0}
+    if family == "toc":
+        return {"scope": "toc", "placement": "structural", "required": True, "order": 1}
+    return {"scope": "body", "placement": "freeform", "required": False, "order": None}
+
+
+def _role_entry(role_id: str, style, *, confidence: float, status: str, signal: str) -> dict:
+    return {
+        "resolver": {
+            "type": schema.ResolverType.NAMED_STYLE.value,
+            "style_id": _style_id(style),
+            "style_name": style.name,
+            "style_type": _style_type(style),
+        },
+        "appearance": {},
+        "usage": role_usage(role_id),
+        "verified": True,
+        "confidence": confidence,
+        "status": status,
+        "evidence": {"signal": signal},
+    }
+
+
+def _style_type(style) -> str:
+    if style.type == WD_STYLE_TYPE.PARAGRAPH:
+        return "paragraph"
+    if style.type == WD_STYLE_TYPE.TABLE:
+        return "table"
+    if style.type == WD_STYLE_TYPE.CHARACTER:
+        return "character"
+    return str(style.type)
+
+
+def infer_roles(doc) -> dict:
+    roles: dict = {"_index": []}
+
+    def add(role_id: str, style, confidence: float, status: str, signal: str) -> None:
+        if role_id in roles:
+            return
+        roles[role_id] = _role_entry(role_id, style, confidence=confidence, status=status, signal=signal)
+        roles["_index"].append(role_id)
+
+    paragraph_styles = [s for s in doc.styles if s.type == WD_STYLE_TYPE.PARAGRAPH]
+    table_styles = [s for s in doc.styles if s.type == WD_STYLE_TYPE.TABLE]
+
+    normal = _find_style(paragraph_styles, "Normal")
+    if normal is not None:
+        add("paragraph", normal, 1.0, schema.Status.ROBUST.value, "builtin Normal")
+
+    for level in (1, 2, 3):
+        style = _find_style(paragraph_styles, f"Heading {level}")
+        if style is not None:
+            add(schema.role_id("heading", level), style, 1.0, schema.Status.ROBUST.value, f"builtin Heading {level}")
+
+    title = _find_style(paragraph_styles, "Title")
+    if title is not None:
+        add("cover.title", title, 0.8, schema.Status.BEST_EFFORT.value, "builtin Title style")
+
+    toc = _toc_heading_style(paragraph_styles)
+    if toc is not None:
+        add("toc", toc, 0.7, schema.Status.BEST_EFFORT.value, "TOC/contents-named paragraph style")
+
+    callout = _best_name_token_style(paragraph_styles, "callout")
+    if callout is not None:
+        add("callout.info", callout, 0.62, schema.Status.BEST_EFFORT.value, "name-token callout")
+
+    caption = _find_style(paragraph_styles, "Caption")
+    if caption is not None:
+        add("caption", caption, 0.9, schema.Status.ROBUST.value, "builtin Caption")
+
+    quote = _find_style(paragraph_styles, "Quote")
+    if quote is not None:
+        add("quote", quote, 0.9, schema.Status.ROBUST.value, "builtin Quote")
+
+    table = _best_name_token_style(table_styles, "table") or _find_style(table_styles, "Table Grid")
+    if table is not None:
+        add("table.default", table, 0.72, schema.Status.BEST_EFFORT.value, "table style candidate")
+
+    if normal is not None:
+        add("list.bullet.1", normal, 0.45, schema.Status.BEST_EFFORT.value, "M1 fallback list paragraph")
+
+    return roles
+
+
+def _find_style(styles: Iterable, name: str):
+    for style in styles:
+        if style.name == name:
+            return style
+    return None
+
+
+def _best_name_token_style(styles: Iterable, family: str):
+    tokens = textutil.NAME_TOKEN_LEXICON.get(family, frozenset())
+    for style in styles:
+        lname = style.name.lower()
+        if any(token in lname for token in tokens):
+            return style
+    return None
+
+
+def _toc_heading_style(styles: Iterable):
+    """Return the paragraph style that heads a Table of Contents, if any.
+
+    Prefers an explicit ``TOCHeading``-style id/name; otherwise falls back to any
+    style whose name carries a multilingual contents token (``toc``/``contents``/
+    ``sommario``/``indice``/``inhalt``/``contenido`` …). Brand-agnostic: the match
+    is on the style *family* token, never on a brand-specific label. TOC-entry
+    styles (``TOC 1``, ``TOC 2`` …) are skipped in favour of the heading style.
+    """
+    tokens = textutil.NAME_TOKEN_LEXICON.get("toc", frozenset())
+    fallback = None
+    for style in styles:
+        sid = (getattr(style, "style_id", None) or "").lower()
+        lname = (style.name or "").lower()
+        if sid in ("tocheading", "toc heading") or "tocheading" in sid:
+            return style
+        if "heading" in lname and any(tok in lname for tok in tokens):
+            return style
+        if fallback is None and any(tok in lname for tok in tokens):
+            # A plain TOC-entry style (e.g. "TOC 1"); keep as a last resort.
+            fallback = style
+    return fallback

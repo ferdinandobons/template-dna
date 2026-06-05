@@ -1,0 +1,120 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TemplateDNA — learn a company template once, generate on-brand Word, PowerPoint and Excel forever">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1022"/>
+      <stop offset="0.55" stop-color="#111A36"/>
+      <stop offset="1" stop-color="#0C1430"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6EA8FE"/>
+      <stop offset="1" stop-color="#5B8DEF"/>
+    </linearGradient>
+    <linearGradient id="scan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6EA8FE" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#6EA8FE" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#6EA8FE" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1.4" cy="1.4" r="1.4" fill="#FFFFFF" fill-opacity="0.045"/>
+    </pattern>
+  </defs>
+
+  <!-- backdrop -->
+  <rect width="1280" height="360" rx="20" fill="url(#bg)"/>
+  <rect width="1280" height="360" rx="20" fill="url(#dots)"/>
+  <rect x="0.5" y="0.5" width="1279" height="359" rx="20" fill="none" stroke="#FFFFFF" stroke-opacity="0.06"/>
+
+  <!-- ===== LEFT: the company template being learned ===== -->
+  <g filter="url(#soft)">
+    <rect x="70" y="92" width="190" height="176" rx="12" fill="#161F3D" stroke="#2C3A66" stroke-width="1.5"/>
+    <!-- letterhead bar + logo dot -->
+    <rect x="70" y="92" width="190" height="30" rx="12" fill="#1E2A50"/>
+    <circle cx="92" cy="107" r="7" fill="url(#accent)"/>
+    <rect x="106" y="103" width="64" height="8" rx="4" fill="#43568C"/>
+    <!-- type sample -->
+    <text x="88" y="160" font-family="Georgia, 'Times New Roman', serif" font-size="30" font-weight="700" fill="#E8EEFF">Aa</text>
+    <rect x="138" y="142" width="92" height="7" rx="3.5" fill="#3A4A7C"/>
+    <rect x="138" y="156" width="74" height="7" rx="3.5" fill="#33426F"/>
+    <!-- palette swatches -->
+    <rect x="88" y="184" width="22" height="22" rx="5" fill="#5B8DEF"/>
+    <rect x="116" y="184" width="22" height="22" rx="5" fill="#34D399"/>
+    <rect x="144" y="184" width="22" height="22" rx="5" fill="#F59E0B"/>
+    <rect x="172" y="184" width="22" height="22" rx="5" fill="#F472B6"/>
+    <!-- body lines -->
+    <rect x="88" y="220" width="142" height="6" rx="3" fill="#2E3C68"/>
+    <rect x="88" y="234" width="120" height="6" rx="3" fill="#2A375F"/>
+    <rect x="88" y="248" width="134" height="6" rx="3" fill="#2A375F"/>
+    <!-- extraction scan line -->
+    <rect x="70" y="170" width="190" height="22" fill="url(#scan)"/>
+  </g>
+  <text x="165" y="298" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#8FA6D8" letter-spacing="0.5">company template</text>
+
+  <!-- ===== CENTER: extract -> Brand Profile -> generate ===== -->
+  <!-- arrow in -->
+  <path d="M286 180 H372" stroke="#3C4E84" stroke-width="2.5" stroke-dasharray="2 7" stroke-linecap="round"/>
+  <path d="M372 180 l-9 -5 v10 z" fill="#6EA8FE"/>
+
+  <!-- brand profile node -->
+  <g filter="url(#soft)">
+    <rect x="392" y="138" width="178" height="84" rx="16" fill="#16213F" stroke="url(#accent)" stroke-width="1.6"/>
+    <circle cx="430" cy="180" r="17" fill="#0E1730" stroke="#6EA8FE" stroke-width="1.6"/>
+    <path d="M423 180 a7 7 0 1 1 14 0 a7 7 0 1 1 -14 0 M430 173 v-5 M430 192 v-5 M423 180 h-5 M442 180 h-5"
+          stroke="#6EA8FE" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+    <text x="456" y="174" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="14" font-weight="700" fill="#EAF1FF">Brand Profile</text>
+    <text x="456" y="194" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#7E96CC">brand-kit/</text>
+  </g>
+
+  <!-- arrow out (fans to three) -->
+  <path d="M584 180 H648" stroke="#3C4E84" stroke-width="2.5" stroke-dasharray="2 7" stroke-linecap="round"/>
+  <path d="M648 180 C 678 180, 680 110, 712 110" stroke="#3C4E84" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M648 180 H712" stroke="#3C4E84" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M648 180 C 678 180, 680 250, 712 250" stroke="#3C4E84" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <!-- ===== RIGHT: three on-brand outputs ===== -->
+  <!-- DOCX -->
+  <g filter="url(#soft)">
+    <rect x="716" y="84" width="150" height="52" rx="11" fill="#16203E" stroke="#2C3A66" stroke-width="1.4"/>
+    <rect x="716" y="84" width="6" height="52" rx="3" fill="#5B8DEF"/>
+    <rect x="736" y="98" width="20" height="24" rx="4" fill="#1E2A50" stroke="#5B8DEF" stroke-width="1.2"/>
+    <text x="746" y="114" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="700" fill="#9DC0FF">W</text>
+    <text x="770" y="106" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#EAF1FF">Word</text>
+    <text x="770" y="123" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#7E96CC">.docx</text>
+  </g>
+  <!-- PPTX -->
+  <g filter="url(#soft)">
+    <rect x="716" y="154" width="150" height="52" rx="11" fill="#16203E" stroke="#2C3A66" stroke-width="1.4"/>
+    <rect x="716" y="154" width="6" height="52" rx="3" fill="#F59E0B"/>
+    <rect x="736" y="168" width="20" height="24" rx="4" fill="#2A2440" stroke="#F59E0B" stroke-width="1.2"/>
+    <text x="746" y="184" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="700" fill="#FFCE85">P</text>
+    <text x="770" y="176" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#EAF1FF">PowerPoint</text>
+    <text x="770" y="193" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#7E96CC">.pptx</text>
+  </g>
+  <!-- XLSX -->
+  <g filter="url(#soft)">
+    <rect x="716" y="224" width="150" height="52" rx="11" fill="#16203E" stroke="#2C3A66" stroke-width="1.4"/>
+    <rect x="716" y="224" width="6" height="52" rx="3" fill="#34D399"/>
+    <rect x="736" y="238" width="20" height="24" rx="4" fill="#16322A" stroke="#34D399" stroke-width="1.2"/>
+    <text x="746" y="254" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="700" fill="#92F0CE">X</text>
+    <text x="770" y="246" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" fill="#EAF1FF">Excel</text>
+    <text x="770" y="263" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#7E96CC">.xlsx</text>
+  </g>
+
+  <!-- ===== WORDMARK ===== -->
+  <g transform="translate(944,120)">
+    <text x="0" y="0" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, sans-serif" font-size="44" font-weight="800" letter-spacing="-1" fill="#FFFFFF">Template<tspan fill="#6EA8FE">DNA</tspan></text>
+    <text x="2" y="34" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15.5" font-weight="500" fill="#A9BDE6">Learn a company's template once.</text>
+    <text x="2" y="58" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15.5" font-weight="500" fill="#A9BDE6">Generate on-brand documents forever.</text>
+    <!-- chips -->
+    <g transform="translate(2,86)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#9DB4E8">
+      <rect x="0" y="-14" width="86" height="24" rx="12" fill="#16213F" stroke="#2C3A66"/>
+      <text x="14" y="2">extract</text>
+      <rect x="98" y="-14" width="80" height="24" rx="12" fill="#16213F" stroke="#2C3A66"/>
+      <text x="112" y="2">verify</text>
+      <rect x="190" y="-14" width="96" height="24" rx="12" fill="#16213F" stroke="#2C3A66"/>
+      <text x="204" y="2">generate</text>
+    </g>
+  </g>
+</svg>

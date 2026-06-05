@@ -1,0 +1,19 @@
+{
+  "cover": {
+    "title": "Quarterly Review",
+    "fields": {
+      "doc_id": "RPT-001"
+    }
+  },
+  "blocks": [
+    { "type": "heading", "level": 1, "text": "Highlights" },
+    { "type": "paragraph", "text": "This paragraph resolves to the brand body style." },
+    { "type": "callout", "intent": "info", "text": "The profile chooses the callout style." },
+    { "type": "list", "items": [{ "text": "List styling comes from the profile." }] },
+    {
+      "type": "table",
+      "columns": ["Area", "Status"],
+      "rows": [["Pipeline", "Healthy"], ["Delivery", "Green"]]
+    }
+  ]
+}
