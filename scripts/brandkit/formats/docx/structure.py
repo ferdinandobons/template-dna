@@ -50,11 +50,6 @@ def _local_name(tag) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-# ---------------------------------------------------------------------------
-# Demo markers (kept for back-compat with the M1 fixture-driven detector).
-# ---------------------------------------------------------------------------
-DEMO_MARKERS = ("Example first-level title", "General instructions")
-
 # Multilingual "contents" words (EN/IT/FR/DE/ES). Lowercased; matched against the
 # stripped, lowercased text of a heading paragraph. Brand-agnostic.
 TOC_HEADING_WORDS: frozenset[str] = frozenset(
@@ -562,27 +557,48 @@ def _field_span_indices(doc, field_id: str) -> Optional[list[int]]:
 def _index_field_remove_indices(doc, field_id: str) -> set[int]:
     """Return the body-child indices a REMOVE of ``field_id`` would delete.
 
-    The field's ``[begin .. end]`` span plus an immediately-preceding lone index
-    heading paragraph (a short, non-strong paragraph directly above the span: the
-    index-title heading) and any blank separators
-    between them. Resolved against the LIVE tree; never includes the final
-    ``sectPr``.
+    The field's ``[begin .. end]`` span PLUS its **introducing heading** - the
+    orphan-index-heading fix. When a caption index is removed (e.g. a stale
+    table-of-tables / table-of-figures), the heading paragraph that introduces it
+    (e.g. an ``Indice delle Tabelle`` / ``Index of Figures`` line) would otherwise
+    be left behind as an orphan heading pointing at nothing. So this also removes
+    the introducing heading and any blank separators between it and the span.
+
+    The heading is identified **STRUCTURALLY, never by literal**: it is the
+    paragraph immediately preceding the field span that
+
+      - is a non-field paragraph (carries no strong TOC marker of its own), and
+      - is itself classified in the **toc region** (the stacked-index front matter)
+        by :func:`classify_body_children`, and
+      - is non-empty.
+
+    The toc-region membership is the structural proof that this preceding line is
+    index front matter (an index title) rather than ordinary body content; it is
+    language- and brand-invariant (no word list, no length cutoff). Resolved
+    against the LIVE tree; never includes the final ``sectPr``.
     """
     span = _field_span_indices(doc, field_id)
     if not span:
         return set()
     children = list(doc.element.body)
+    # Structural region map: only a paragraph the classifier puts in the toc region
+    # qualifies as the introducing index heading.
+    toc_indices = {
+        c["index"] for c in classify_body_children(doc) if c.get("region") == "toc"
+    }
     to_remove = set(span)
     j = min(span) - 1
     heading_at: Optional[int] = None
     while j >= 0 and not _is_sectpr(children[j]):
         if _local_name(children[j].tag) != "p":
             break
+        if j not in toc_indices:
+            break  # crossed out of the index front matter -> body content, stop
         txt = _p_text(children[j]).strip()
         if txt == "":
             j -= 1
             continue
-        if not _element_holds_strong_toc(children[j]) and len(txt) <= 120:
+        if not _element_holds_strong_toc(children[j]):
             heading_at = j
         break
     if heading_at is not None:
@@ -663,25 +679,33 @@ def inventory_regions(doc) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Demo-region detection (kept; made less fixture-specific while still anchoring
-# on evidence). Backwards-compatible shape.
+# Demo-region detection (purely structural; NO hardcoded marker phrases).
 # ---------------------------------------------------------------------------
 def detect_demo_region(doc) -> dict:
-    """Detect the template's demo / instruction body region.
+    """Detect the template's demo / instruction body region structurally.
 
-    Anchors on evidence, not on a hardcoded index. The region begins at the first
-    body-region Heading-1 paragraph (the demo body start) and the presence of any
-    known demo/instruction marker phrase is recorded. The legacy fixture markers
-    are still honoured so the M1 synthetic template keeps working, but detection no
-    longer *requires* them: any body-region content after the cover/TOC is treated
-    as a candidate demo region.
+    No literal marker phrases (the old ``DEMO_MARKERS`` are gone, plan §5): demo
+    handling is owned by comprehension ``demo_classification`` plus the structural
+    freeform-body clear, both of which are language-invariant. This function only
+    surfaces the structural facts:
+
+      - ``present`` - whether the template has any freeform body region at all
+        (everything after the cover/TOC), which is the candidate demo region;
+      - ``start_style_id`` / ``start_text`` - the first body-region Heading-1
+        paragraph's style id and its *own* captured text (THIS template's own
+        placeholder text, never a fixed phrase). ``no_residual_template_text``
+        compares the produced document against this captured text, so the
+        anti-residual guard stays per-template and language-agnostic.
+
+    ``instruction_markers`` is retained for shape back-compat but is always empty:
+    detection no longer matches any global phrase list.
     """
     classes = classify_body_children(doc)
     body_children = [c for c in classes if c["region"] == "body"]
     body = doc.element.body
     children = list(body)
 
-    # First body-region Heading-1 paragraph -> the demo start anchor.
+    # First body-region Heading-1 paragraph -> the demo start anchor (structural).
     start_style_id = None
     start_text = None
     for c in body_children:
@@ -691,14 +715,11 @@ def detect_demo_region(doc) -> dict:
             start_text = _p_text(el)[:200]
             break
 
-    marker_hits = [m for m in DEMO_MARKERS if any(m in p.text for p in doc.paragraphs)]
-    present = bool(body_children) or bool(marker_hits)
-
     return {
-        "present": present,
-        "start_style_id": start_style_id or ("Heading1" if marker_hits else None),
-        "start_text": start_text or (marker_hits[0] if marker_hits else None),
-        "instruction_markers": marker_hits,
+        "present": bool(body_children),
+        "start_style_id": start_style_id,
+        "start_text": start_text,
+        "instruction_markers": [],
     }
 
 

@@ -764,5 +764,139 @@ class ComprehensionReconcileTest(unittest.TestCase):
             self.assertEqual(cleared, set())  # deterministic path returns no cleared refs
 
 
+# ---------------------------------------------------------------------------
+# ORPHAN-INDEX-HEADING fix - when a caption index is removed, its introducing
+# heading (a non-field paragraph immediately above the span, identified
+# STRUCTURALLY by toc-region membership) is removed too, leaving no orphan
+# heading. Reproduces the Napoleon 'Indice delle Tabelle'/'figure' case and the
+# index-shift regression (the cover fill inserts a paragraph, so the index refs
+# must be resolved before the cover shifts the positions).
+# ---------------------------------------------------------------------------
+class OrphanIndexHeadingTest(unittest.TestCase):
+    def _build_shell(self, td):
+        """Cover (a fillable SDT title so compose_cover INSERTS and shifts indices)
+        + outline TOC + an index heading + a caption index + a post-index body
+        heading. Mirrors the real template_chat front matter."""
+        shell = Path(td) / "shell.docx"
+        doc = Document()
+        # A fillable cover title SDT in the cover region (before the TOC). Filling
+        # it appends a paragraph -> shifts every subsequent top-level child index.
+        title_p = doc.add_paragraph("Insert title here")
+        sdt = OxmlElement("w:sdt")
+        sdtPr = OxmlElement("w:sdtPr")
+        alias = OxmlElement("w:alias"); alias.set(qn("w:val"), "Titolo"); sdtPr.append(alias)
+        sdt.append(sdtPr)
+        sc = OxmlElement("w:sdtContent")
+        sp = OxmlElement("w:p"); sr = OxmlElement("w:r"); st = OxmlElement("w:t")
+        st.text = "Insert title here"; sr.append(st); sp.append(sr); sc.append(sp)
+        sdt.append(sc)
+        title_p._p.addnext(sdt)
+        _add_toc_field(doc, 'TOC \\o "1-3" \\h')                 # outline TOC
+        doc.add_paragraph("Indice delle Tabelle")                # introducing heading
+        _add_multi_paragraph_index(doc, 'TOC \\h \\c "Tabella"')  # caption index
+        doc.add_paragraph("Real Body Heading", style="Heading 1")  # body (post-index)
+        doc.save(shell)
+        return shell
+
+    def _profile_for(self, shell):
+        from brandkit.formats.docx import extract as docx_extract
+        import tempfile, os, json
+        with tempfile.TemporaryDirectory() as ed:
+            old = Path.cwd(); os.chdir(ed)
+            try:
+                pj = docx_extract.extract(shell, "orphan", scope="project")
+                return json.loads(Path(pj).read_text())
+            finally:
+                os.chdir(old)
+
+    def test_clearing_caption_index_removes_its_introducing_heading_in_place(self):
+        # Unit-level: the structural remove pulls in the toc-region heading above
+        # the field span, and the post-index body heading is NEVER touched.
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            doc = Document(shell)
+            tabella = next(
+                f["id"] for f in structure.inventory_fields(doc) if f["seq_id"] == "Tabella"
+            )
+            idxs = structure._index_field_remove_indices(doc, tabella)
+            children = list(doc.element.body)
+            removed_texts = {
+                "".join(t.text or "" for t in children[i].iter(w("t"))).strip()
+                for i in idxs
+            }
+            self.assertIn("Indice delle Tabelle", removed_texts)  # orphan heading in
+            self.assertNotIn("Real Body Heading", removed_texts)  # body heading out
+            structure.remove_index_fields(doc, [tabella])
+            kept = "\n".join(p.text for p in doc.paragraphs)
+            self.assertNotIn("Indice delle Tabelle", kept)
+            self.assertIn("Real Body Heading", kept)
+
+    def test_orphan_heading_gone_through_full_generate_after_cover_shift(self):
+        # End-to-end regression: the cover fill inserts a paragraph (index shift);
+        # the index reconcile must resolve refs BEFORE that shift, so the orphan
+        # 'Indice delle Tabelle' heading is removed and idempotency holds.
+        import tempfile, hashlib
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            prof = self._profile_for(shell)
+            s = prof["surface"]["docx"]
+            tabella = next(f["id"] for f in s["fields"] if f["seq_id"] == "Tabella")
+            comp = {
+                "conventions": {"indexes": [
+                    {"index_ref": tabella, "seq_id": "Tabella", "reconcile": "clear"}
+                ], "sections": []},
+                "demo_classification": {
+                    "regions": [{"region_ref": f"region.{tabella}", "verdict": "demo"}]
+                },
+            }
+            _present_comp(prof, comp)
+            idoc = ir.IntermediateDocument(
+                blocks=[ir.Heading(level=1, runs=[{"t": "New Real Section"}])],
+                cover=ir.Cover(title=[{"t": "Filled Title"}]),
+            )
+            out1 = Path(td) / "o1.docx"
+            findings: list[Finding] = []
+            docx_generate.generate(prof, shell, idoc, out1, findings=findings)
+            gen = Document(out1)
+            body_text = "\n".join(p.text for p in gen.paragraphs)
+            alltext = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
+            # The orphan introducing heading is gone, the stale entries are gone.
+            self.assertNotIn("Indice delle Tabelle", body_text)
+            self.assertNotIn("entry one", body_text)
+            self.assertNotIn("entry two", body_text)
+            # The outline TOC + cover fill + new content survived; no false net-loss.
+            self.assertIn("Filled Title", alltext)
+            self.assertIn("New Real Section", body_text)
+            self.assertFalse(
+                any(
+                    f.check == "no_net_structure_loss"
+                    and f.severity == schema.Severity.ERROR.value
+                    for f in findings
+                )
+            )
+            # Idempotent: generate twice -> byte identical.
+            out2 = Path(td) / "o2.docx"
+            docx_generate.generate(prof, shell, idoc, out2)
+            self.assertEqual(
+                hashlib.sha256(out1.read_bytes()).hexdigest(),
+                hashlib.sha256(out2.read_bytes()).hexdigest(),
+            )
+
+    def test_demo_marker_literals_are_gone(self):
+        # The DEMO_MARKERS literal list is removed; detect_demo_region no longer
+        # matches any global phrase (instruction_markers is always empty) and works
+        # purely structurally off the first body Heading-1.
+        self.assertFalse(hasattr(structure, "DEMO_MARKERS"))
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            demo = structure.detect_demo_region(Document(shell))
+            self.assertEqual(demo["instruction_markers"], [])
+            self.assertTrue(demo["present"])
+            # start_text is THIS template's own captured body heading, not a literal.
+            self.assertEqual(demo["start_text"], "Real Body Heading")
+
+
 if __name__ == "__main__":
     unittest.main()

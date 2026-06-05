@@ -109,9 +109,13 @@ def main(argv: list[str] | None = None) -> int:
                     loaded.profile, loaded.shell_path, parse_idoc(data), args.output, findings=gen_findings
                 )
             elif loaded.kind == "pptx":
-                out = pptx_generate.generate(loaded.profile, loaded.shell_path, parse_idoc(data), args.output)
+                out = pptx_generate.generate(
+                    loaded.profile, loaded.shell_path, parse_idoc(data), args.output, findings=gen_findings
+                )
             elif loaded.kind == "xlsx":
-                out = xlsx_generate.generate(loaded.profile, loaded.shell_path, parse_grid(data), args.output)
+                out = xlsx_generate.generate(
+                    loaded.profile, loaded.shell_path, parse_grid(data), args.output, findings=gen_findings
+                )
             else:
                 raise ValueError(f"unsupported profile kind: {loaded.kind}")
         except Exception as exc:

@@ -18,8 +18,14 @@ Four concerns:
    :func:`find_markdown_literals` are the shared detector.
 3. **Slug / safe filename** - deterministic, filesystem-safe identifiers for
    brand-kit directory names and asset filenames.
-4. **Name-token lexicon** - the multilingual word lists that the role-inference
-   scorer consults as its *weakest* (0.20) signal. Tokens cover EN/IT/FR/DE/ES.
+4. **Name-token lexicon (a WEAK PRIOR, never a gate)** - multilingual word lists
+   the role-inference scorer consults as its *weakest* (0.20) signal and only as
+   a LAST RESORT. The PRIMARY signals are structural, language-invariant OOXML
+   facts (builtin style ids, field codes, SDT flags, placeholder TYPES,
+   named-range geometry); the lexicon merely ADDS weak positive evidence when no
+   structural signal is available and never gates output. See
+   :data:`NAME_TOKEN_LEXICON` for the full anti-overfitting contract. Tokens
+   cover EN/IT/FR/DE/ES.
 """
 from __future__ import annotations
 
@@ -187,14 +193,31 @@ def safe_filename(value: str, *, default: str = "file") -> str:
 # ---------------------------------------------------------------------------
 # Multilingual name-token lexicon for role inference (WEAK PRIOR ONLY).
 # ---------------------------------------------------------------------------
-# IMPORTANT (plan §5 anti-overfitting): this lexicon is the *weakest* signal and a
-# LAST RESORT. The PRIMARY, language-invariant signals are structural OOXML facts -
-# builtin style ids (``Heading N`` / ``Title`` / ``Caption`` / ``Quote`` /
-# ``Normal``), field codes (``w:instrText`` ``TOC`` / ``TOC \c``), SDT flags
-# (alias / dataBinding / docPartGallery / showingPlcHdr), and placeholder types.
-# A role recognised *only* via this lexicon is marked best_effort / low-confidence
-# and never gates output. The lexicon only ever ADDS weak positive evidence when no
-# structural signal is available; it is never a matching rule on rendered text.
+# IMPORTANT (plan §5 / M-i-8 lexicon demotion): this lexicon is the engine's
+# *weakest* signal and a LAST-RESORT TIEBREAKER, retained ONLY for the
+# comprehension-absent deterministic path. It is deliberately NOT deleted - it is
+# the only thing left to nudge an ambiguous custom-named style when no structural
+# evidence exists - but it has been firmly DEMOTED below every structural signal:
+#
+#   PRIMARY (language-invariant, structural OOXML facts; these decide the role):
+#     - docx: builtin style ids (``Heading N`` / ``Title`` / ``Caption`` /
+#       ``Quote`` / ``Normal``), field codes (``w:instrText`` ``TOC`` /
+#       ``TOC \c`` / ``TOC \f``), SDT flags (alias / dataBinding /
+#       docPartGallery / showingPlcHdr).
+#     - pptx: placeholder *types* (TITLE / SUBTITLE / BODY ...) and named layouts.
+#     - xlsx: named-range geometry (single vs multi cell, merged header, freeze,
+#       tables) and number formats.
+#   WEAK PRIOR (this lexicon): lowercased substring containment in a style's
+#     *display name*. It only ever ADDS weak positive evidence; it NEVER strips,
+#     NEVER overrides a structural signal, and NEVER matches on rendered body
+#     text. A role recognised *only* via this lexicon is stamped best_effort /
+#     low-confidence (<= the structural floor) so it can never gate output: the
+#     deterministic ``resolver_targets_exist`` / ``comprehension_targets_exist``
+#     guards reject any load-bearing ref that is not a verbatim structural id.
+#
+# Because the signal is language-invariant at the structural layer, removing or
+# editing tokens here can only ever weaken a heuristic tiebreaker - it can never
+# change which output is brand-valid. That is the whole point of the demotion.
 #
 # Maps a semantic *role family* -> set of lowercase substrings that, when found
 # in a style's display name, weakly suggest that role. EN / IT / FR / DE / ES.
@@ -252,7 +275,14 @@ def name_token_score(style_name: str, role_family: str) -> float:
 
     Comparison is case-insensitive substring containment. Returns 0.0 when the
     role family is unknown or no token matches. This is the raw (pre-weight)
-    name-token signal; the scorer multiplies it by the 0.20 weight.
+    name-token signal; the scorer multiplies it by the 0.20 WEAK-PRIOR weight.
+
+    This is a tiebreaker, not a decision: a non-zero score only ever ADDS to a
+    role's evidence and is dominated by any structural signal (builtin style id,
+    field code, placeholder type, named-range geometry). It never gates output -
+    a role won purely on this score is best_effort/low-confidence and is still
+    subject to the deterministic ``resolver_targets_exist`` guard. Returning 0.0
+    here can never *remove* a structurally-established role.
     """
     tokens = NAME_TOKEN_LEXICON.get(role_family)
     if not tokens:

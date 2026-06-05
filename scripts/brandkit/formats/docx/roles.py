@@ -64,6 +64,23 @@ def _style_type(style) -> str:
 
 
 def infer_roles(doc) -> dict:
+    """Infer the template's role registry.
+
+    Evidence order (plan §5 / M-i-8 lexicon demotion) is STRICT: a role is bound by
+    a **structural** signal whenever one exists, and the multilingual name-token
+    lexicon (:data:`text.NAME_TOKEN_LEXICON`) is consulted ONLY as a last-resort
+    weak prior, for the handful of roles that have no builtin style id at all.
+
+      PRIMARY (structural, language-invariant; high confidence / robust):
+        builtin style ids - ``Normal`` -> paragraph, ``Heading N`` -> heading.N,
+        ``Title`` -> cover.title, ``Caption`` -> caption, ``Quote`` -> quote,
+        ``TOCHeading`` -> toc, ``Table Grid`` -> table.default fallback.
+      WEAK PRIOR (lexicon name-token containment; best_effort / low confidence so
+        it can NEVER gate output): only ``callout.info`` (no builtin style exists)
+        and a *custom* brand table style. A role bound solely by the lexicon is
+        stamped best_effort and its load-bearing resolver ref is still a verbatim
+        structural id the deterministic guards bind to.
+    """
     roles: dict = {"_index": []}
 
     def add(role_id: str, style, confidence: float, status: str, signal: str) -> None:
@@ -106,10 +123,13 @@ def infer_roles(doc) -> dict:
     if quote is not None:
         add("quote", quote, 0.9, schema.Status.ROBUST.value, "builtin Quote")
 
-    # A brand's own table style is the on-brand resolver target; it is recognised
-    # via the table-family name-token lexicon (a WEAK PRIOR, hence best_effort /
-    # low confidence so it never gates output) and falls back to the builtin
-    # ``Table Grid`` style id when the template defines no custom table style.
+    # table.default has no single builtin "brand table" style id, so the only
+    # nomination of a *custom* table style is the table-family name-token lexicon -
+    # a WEAK PRIOR (best_effort / low confidence so it never gates output). The
+    # builtin ``Table Grid`` style id is the STRUCTURAL floor used when the lexicon
+    # nominates nothing. Either way the load-bearing resolver ref is the verbatim
+    # style id the deterministic guards bind to, so the lexicon can never widen the
+    # brand guarantee.
     table = _best_name_token_style(table_styles, "table") or _find_style(table_styles, "Table Grid")
     if table is not None:
         add("table.default", table, 0.72, schema.Status.BEST_EFFORT.value, "table style candidate (weak prior)")
@@ -128,6 +148,15 @@ def _find_style(styles: Iterable, name: str):
 
 
 def _best_name_token_style(styles: Iterable, family: str):
+    """Return the first style whose display NAME contains a family lexicon token.
+
+    WEAK PRIOR ONLY (plan §5 / M-i-8): the multilingual name-token lexicon is the
+    engine's weakest, last-resort signal. It is consulted only for roles with no
+    builtin structural style id (``callout``, a custom brand ``table`` style) and
+    its result is always stamped best_effort / low confidence by the caller so it
+    can never gate output. It matches a style DISPLAY NAME only, never rendered
+    body text, so it cannot leak a brand word into the matching of content.
+    """
     tokens = textutil.NAME_TOKEN_LEXICON.get(family, frozenset())
     for style in styles:
         lname = style.name.lower()

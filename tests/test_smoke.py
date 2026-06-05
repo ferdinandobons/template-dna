@@ -266,7 +266,23 @@ class M1SmokeTest(unittest.TestCase):
                 self.assertEqual(main(["extract", "--name", "model", "--template", str(template), "--scope", "project"]), 0)
                 profile = json.loads((tmp_path / "brand-kit" / "model" / "profile.json").read_text())
                 self.assertEqual(profile["kind"], "xlsx")
-                self.assertEqual(profile["roles"]["title"]["resolver"]["type"], "named_range")
+                # De-literalized: no privileged "title" role. Every named range is a
+                # generic ``named_range`` role keyed by its slugified own name. The
+                # author's range names ("title_cell"/"data_region") are DATA carried
+                # as ids, never code-side matching literals.
+                self.assertEqual(profile["roles"]["region.titlecell"]["resolver"]["type"], "named_range")
+                self.assertEqual(profile["roles"]["region.titlecell"]["resolver"]["name"], "title_cell")
+                self.assertEqual(profile["roles"]["region.dataregion"]["resolver"]["type"], "named_range")
+                # Format-uniform comprehension inventories (geometry evidence only).
+                surface = profile["surface"]["xlsx"]
+                anchors_by_name = {a["name"]: a for a in surface["cover_anchors"]}
+                self.assertEqual(anchors_by_name["title_cell"]["cardinality"], "single_cell")
+                self.assertEqual(anchors_by_name["title_cell"]["demo_value"], "{{title}}")
+                self.assertEqual(anchors_by_name["data_region"]["cardinality"], "multi_cell")
+                self.assertEqual(surface["fields"], [])  # legal-empty xlsx field inventory
+                region_ids = {r["id"] for r in surface["regions"]}
+                self.assertIn("region.dataregion", region_ids)  # multi-cell sample-data
+                self.assertTrue(any(r["kind"] == "sheet" for r in surface["regions"]))
                 self.assertIn("artifact_catalog", profile)
                 self.assertIn("formulas", profile["artifact_catalog"])
                 self.assertIn("Report!B5", profile["artifact_catalog"]["formulas"])
@@ -295,7 +311,10 @@ class M1SmokeTest(unittest.TestCase):
                 self.assertEqual(ws["A1"].value, "Quarterly Model")
                 self.assertEqual(ws["A4"].value, "Pipeline")
                 self.assertEqual(ws["B4"].value, 42)
+                # Formula preserved verbatim (never re-authored).
                 self.assertEqual(ws["B5"].value, "=SUM(B4:B4)")
+                # Recalc requested so Excel recomputes preserved formulas on open.
+                self.assertTrue(wb.calculation.fullCalcOnLoad)
             finally:
                 os.chdir(old_cwd)
 

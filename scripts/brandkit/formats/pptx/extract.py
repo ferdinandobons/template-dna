@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.enum.shapes import PP_PLACEHOLDER
 
 from brandkit.formats import catalog
+from brandkit.formats.pptx import structure
 from brandkit.ooxml import pack
 from brandkit.profile import schema, store
 
@@ -17,20 +17,35 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
     prs = Presentation(template_path)
     layouts = _layouts(prs)
     roles = _roles(prs, layouts)
+    # Format-uniform comprehension inventories (schema 1.2.0, plan §4 / M-i-7).
+    # Every load-bearing ref the model writes binds to one of these ids; the
+    # validator checks membership. They are the PPTX peers of the docx
+    # cover_anchors / fields / regions:
+    #   - cover_anchors: every placeholder on the cover layout (multi-placeholder
+    #     cover), keyed by layout+ph idx + captured layout prompt as the demo value;
+    #   - fields: the deck's real section list as an agenda/section-list index
+    #     (empty when the deck has no p14:sectionLst);
+    #   - regions: every slide classified cover / structural / demo (a demo slide is
+    #     one whose body text equals a layout placeholder prompt).
+    # An absent comprehension never reads them, so the deterministic path is
+    # unaffected; a deck whose inventory is genuinely empty (e.g. no cover layout)
+    # surfaces an empty list and a comprehension ref into it is fail-closed at QA.
+    cover_anchors = structure.inventory_cover_anchors(prs)
+    fields = structure.inventory_fields(prs)
+    regions = structure.inventory_regions(prs)
+    sections = structure.detect_sections(prs)
+    skeleton = structure.detect_skeleton(prs)
     surface = {
         "pptx": {
             "slide_size_emu": {"w": int(prs.slide_width), "h": int(prs.slide_height)},
             "layouts": layouts,
             "safe_area_emu": {"l": 457200, "t": 457200, "r": 457200, "b": 457200},
+            "cover_anchors": cover_anchors,
+            "fields": fields,
+            "regions": regions,
+            "sections": sections,
         }
     }
-    # Comprehension readiness gate (schema 1.2.0): build_envelope stamps the
-    # canonical ``comprehension`` block as ``status='absent'`` (today's
-    # deterministic path). pptx does NOT yet surface ``surface.pptx.{cover_anchors,
-    # fields,regions}``, so the format-uniform comprehension inventories are legally
-    # empty and ``comprehend`` simply has no ids to bind cover/index refs to. Deep
-    # fact-enrichment for pptx lands on the pptx fact milestone; do NOT force a
-    # docx-shaped cover/index inventory here.
     profile = schema.build_envelope(
         "pptx",
         {"name": name, "display_name": name},
@@ -39,16 +54,20 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
         theme=_theme(),
         roles=roles,
         surface=surface,
+        structure=skeleton,
     )
-    cover_role = roles.get("cover.title") if isinstance(roles, dict) else None
-    cover_present = isinstance(cover_role, dict) and cover_role.get("status") != schema.Status.STUB.value
+    # Anchors track reality: the cover slot count is the real multi-placeholder
+    # count (never a hardcoded ``1``); the demo region is present only when a slide
+    # actually reads as demo (NOT ``bool(prs.slides)``); the section list is present
+    # only when the deck carries one (NOT always-False).
+    demo_present = any(r.get("kind") == "demo" for r in regions)
     profile["anchors"] = {
         "cover": {
-            "kind": schema.AnchorKind.PLACEHOLDER.value if cover_present else schema.AnchorKind.NONE.value,
-            "slots_found": 1 if cover_present else 0,
+            "kind": schema.AnchorKind.PLACEHOLDER.value if cover_anchors else schema.AnchorKind.NONE.value,
+            "slots_found": len(cover_anchors),
         },
-        "demo_region": {"present": bool(prs.slides)},
-        "toc": {"present": False},
+        "demo_region": {"present": demo_present},
+        "sections": {"present": bool(sections)},
     }
     profile["provenance"]["ooxml_parts_seen"] = pack.list_parts(template_path)
     profile["artifact_catalog"] = _artifact_catalog(template_path, prs, profile["provenance"]["ooxml_parts_seen"], layouts)
@@ -57,89 +76,17 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
     return store.save_profile(target, profile, template_path.read_bytes(), extra_files={"PROFILE.md": _profile_md(profile)}, overwrite=True)
 
 
-# Placeholder-type families used to classify real layouts (PP_PLACEHOLDER, §C3).
-# A *title* slot is any of TITLE/CENTER_TITLE/VERTICAL_TITLE; a *body* slot is any
-# text-bearing content placeholder (BODY/OBJECT/SUBTITLE/...). We never invent a
-# layout: every resolver here points at a layout.name that prs actually parsed.
-_TITLE_TYPES = frozenset({
-    PP_PLACEHOLDER.TITLE,
-    PP_PLACEHOLDER.CENTER_TITLE,
-    PP_PLACEHOLDER.VERTICAL_TITLE,
-})
-_SUBTITLE_TYPES = frozenset({PP_PLACEHOLDER.SUBTITLE})
-_BODY_TYPES = frozenset({
-    PP_PLACEHOLDER.BODY,
-    PP_PLACEHOLDER.OBJECT,
-    PP_PLACEHOLDER.VERTICAL_BODY,
-    PP_PLACEHOLDER.VERTICAL_OBJECT,
-})
-
-
-def _classify_layouts(prs: Presentation) -> list[dict]:
-    """Describe each REAL slide layout by the slots it actually exposes.
-
-    Returns a list (in deck order) of ``{name, idx, title_idx, subtitle_idx,
-    body_idx}`` where each ``*_idx`` is the placeholder ``idx`` of the first slot
-    of that family present in the layout, or ``None``. This is the only source of
-    truth for role derivation - nothing here is fabricated.
-    """
-    described: list[dict] = []
-    for pos, layout in enumerate(prs.slide_layouts):
-        title_idx = subtitle_idx = body_idx = None
-        for ph in layout.placeholders:
-            fmt = ph.placeholder_format
-            ptype = fmt.type
-            if ptype in _TITLE_TYPES and title_idx is None:
-                title_idx = fmt.idx
-            elif ptype in _SUBTITLE_TYPES and subtitle_idx is None:
-                subtitle_idx = fmt.idx
-            elif ptype in _BODY_TYPES and body_idx is None:
-                body_idx = fmt.idx
-        described.append({
-            "name": layout.name,
-            "idx": pos,
-            "title_idx": title_idx,
-            "subtitle_idx": subtitle_idx,
-            "body_idx": body_idx,
-        })
-    return described
-
-
-def _pick_cover(described: list[dict]) -> dict | None:
-    """Pick the layout that best reads as a cover/title slide.
-
-    Strongest signal: a title slot paired with a subtitle slot (the canonical
-    cover shape). Falls back to the first layout exposing any title slot.
-    """
-    for d in described:
-        if d["title_idx"] is not None and d["subtitle_idx"] is not None:
-            return d
-    for d in described:
-        if d["title_idx"] is not None:
-            return d
-    return None
-
-
-def _pick_content(described: list[dict], *, exclude_idx: int | None = None) -> dict | None:
-    """Pick the layout that best reads as a title+body content slide.
-
-    Prefers a layout with BOTH a title and a body slot, skipping ``exclude_idx``
-    (the cover) when an alternative exists. Falls back to any title-bearing
-    layout, then any body-bearing layout.
-    """
-    title_body = [d for d in described if d["title_idx"] is not None and d["body_idx"] is not None]
-    for d in title_body:
-        if d["idx"] != exclude_idx:
-            return d
-    if title_body:
-        return title_body[0]
-    for d in described:
-        if d["title_idx"] is not None:
-            return d
-    for d in described:
-        if d["body_idx"] is not None:
-            return d
-    return None
+# Layout classification, cover/content picking, and placeholder-type families now
+# live in the structure peer (one source of truth, plan §4 / M-i-8). The thin
+# re-exports below keep the role-derivation code below (and any caller) reading the
+# same descriptors the inventory uses, so role layouts and cover anchors can never
+# disagree about which layout is the cover.
+_TITLE_TYPES = structure.TITLE_TYPES
+_SUBTITLE_TYPES = structure.SUBTITLE_TYPES
+_BODY_TYPES = structure.BODY_TYPES
+_classify_layouts = structure.classify_layouts
+_pick_cover = structure.pick_cover
+_pick_content = structure.pick_content
 
 
 def _roles(prs: Presentation, layouts: dict) -> dict:

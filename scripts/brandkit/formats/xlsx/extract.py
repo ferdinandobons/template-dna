@@ -1,4 +1,16 @@
 # SPDX-License-Identifier: MIT
+"""XLSX extraction.
+
+Emits the format-uniform comprehension inventories (plan §4) from GEOMETRY
+evidence, with **no** range-name literals. The old ``"title_cell"`` /
+``"data_region"`` special-casing is gone: every named range is surfaced
+generically with its geometry (cardinality / merged header / frozen band / table
+membership) into ``surface.xlsx.cover_anchors``; multi-cell named ranges are
+sample-data candidates in ``surface.xlsx.regions``; ``surface.xlsx.fields`` is the
+legal-empty field inventory (a workbook has no TOC-style field code). Purpose is
+the model's job (``cover_slots`` / ``demo_classification``); the extractor only
+records what the geometry proves.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -6,8 +18,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from brandkit.common.text import slugify
 from brandkit.formats import catalog
+from brandkit.formats.xlsx import structure as xlsx_structure
 from brandkit.ooxml import pack
 from brandkit.profile import schema, store
 
@@ -15,7 +27,18 @@ from brandkit.profile import schema, store
 def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str | Path | None = None) -> Path:
     template_path = Path(template)
     wb = load_workbook(template_path, data_only=False)
-    named_regions = _defined_names(wb)
+
+    named_regions = xlsx_structure.named_regions_map(wb)
+    # Format-uniform inventories the model reasons over and the validator binds to
+    # (plan §4). Geometry evidence only - no range-name literals. ``fields`` is the
+    # legal-empty xlsx field inventory; ``cover_slots``/``conventions.indexes`` for
+    # xlsx therefore have nothing to bind to (readiness gate), and the in-scope
+    # comprehension surface is ``demo_classification`` keyed to ``regions``.
+    cover_anchors = xlsx_structure.inventory_cover_anchors(wb)
+    fields = xlsx_structure.inventory_fields(wb)
+    regions = xlsx_structure.inventory_regions(wb)
+    skeleton = xlsx_structure.detect_skeleton(wb)
+
     roles = _roles(named_regions)
     surface = {
         "xlsx": {
@@ -24,15 +47,11 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
             "named_styles": [style if isinstance(style, str) else style.name for style in wb.named_styles],
             "number_formats": [],
             "table_styles": [],
+            "cover_anchors": cover_anchors,
+            "fields": fields,
+            "regions": regions,
         }
     }
-    # Comprehension readiness gate (schema 1.2.0): build_envelope stamps the
-    # canonical ``comprehension`` block as ``status='absent'`` (today's
-    # deterministic path). xlsx does NOT yet surface ``surface.xlsx.{cover_anchors,
-    # fields,regions}``, so the format-uniform comprehension inventories are legally
-    # empty and ``comprehend`` has no ids to bind cover/index refs to. Region
-    # geometry + demo classification (keyed to named regions) land on the xlsx fact
-    # milestone; do NOT force a docx-shaped cover/index inventory here.
     profile = schema.build_envelope(
         "xlsx",
         {"name": name, "display_name": name},
@@ -41,10 +60,18 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
         theme=_theme(),
         roles=roles,
         surface=surface,
+        structure=skeleton,
     )
+    # Anchors summary derived from GEOMETRY, never from a literal range name. The
+    # cover anchor is "present" when any named region exists to host a cover slot;
+    # the demo region is "present" when any multi-cell (sample-data) region exists.
+    has_sample_data = any(r.get("kind") == "sample_data" for r in regions)
     profile["anchors"] = {
-        "cover": {"kind": schema.AnchorKind.NAMED_RANGE.value if "title_cell" in named_regions else "NONE", "slots_found": 1 if "title_cell" in named_regions else 0},
-        "demo_region": {"present": "data_region" in named_regions},
+        "cover": {
+            "kind": schema.AnchorKind.NAMED_RANGE.value if cover_anchors else schema.AnchorKind.NONE.value,
+            "slots_found": len(cover_anchors),
+        },
+        "demo_region": {"present": has_sample_data},
         "toc": {"present": False},
     }
     profile["provenance"]["ooxml_parts_seen"] = pack.list_parts(template_path)
@@ -54,17 +81,18 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
     return store.save_profile(target, profile, template_path.read_bytes(), extra_files={"PROFILE.md": _profile_md(profile)}, overwrite=True)
 
 
-def _defined_names(wb) -> dict:
-    out = {}
-    for name, defined_name in wb.defined_names.items():
-        destinations = list(defined_name.destinations)
-        if destinations:
-            sheet, coord = destinations[0]
-            out[name] = {"sheet": sheet, "range": coord}
-    return out
-
-
 def _roles(named_regions: dict) -> dict:
+    """Build the role registry from the named ranges - GENERICALLY (no literals).
+
+    Every named range becomes a ``named_range`` role keyed by its slugified name;
+    none is privileged by a hardcoded name. Whether a region is a cover title, a
+    data block, or something else is the comprehension model's call
+    (``cover_slots`` / ``demo_classification``), never a code-side word. When the
+    workbook declares no named range at all, a single default ``cell_style`` role
+    keeps the registry non-empty so generation has a fallback.
+    """
+    from brandkit.common.text import slugify
+
     roles = {"_index": []}
 
     def add(rid: str, resolver: dict, signal: str) -> None:
@@ -78,11 +106,9 @@ def _roles(named_regions: dict) -> dict:
         }
         roles["_index"].append(rid)
 
-    if "title_cell" in named_regions:
-        add("title", {"type": schema.ResolverType.NAMED_RANGE.value, "name": "title_cell"}, "named range title_cell")
-    for name in named_regions:
-        if name != "title_cell":
-            add(f"region.{slugify(name).replace('-', '')}", {"type": schema.ResolverType.NAMED_RANGE.value, "name": name}, f"named range {name}")
+    for name in sorted(named_regions):
+        rid = f"region.{slugify(name).replace('-', '')}"
+        add(rid, {"type": schema.ResolverType.NAMED_RANGE.value, "name": name}, f"named range {name}")
     if not roles["_index"]:
         add("cell.default", {"type": schema.ResolverType.CELL_STYLE.value, "style_name": "Normal"}, "default style")
     return roles
@@ -138,6 +164,8 @@ def _capabilities() -> dict:
         "preserves_formulas_in_shell": True,
         "region_bounds_guard": True,
         "generates_from_shell": True,
+        "emits_region_geometry": True,
+        "comprehension_demo_classification": True,
     }
 
 

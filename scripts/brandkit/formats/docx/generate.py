@@ -62,6 +62,17 @@ def generate(
     struct = profile.get("structure")
     structure.clear_body_region(doc, struct, preserve_cover=True, preserve_toc=True)
 
+    # Reconcile the preserved derived indexes (TOC/TOF/TOT) and demo regions with
+    # the new content FIRST, comprehension-steered when present (no-op when absent).
+    # This MUST run before the cover fill: the surfaced index ids (and the orphan-
+    # index-heading lookup) are position-based over the top-level body children, and
+    # ``compose_cover`` inserts a paragraph into the cover region, shifting every
+    # subsequent child index. The body clear above leaves the cover/TOC positions
+    # untouched (the body region is last), so resolving the index refs here - before
+    # any cover insert - keeps the position ids valid. Removing a stale caption index
+    # also removes its introducing heading (the orphan-index-heading fix).
+    removed_refs = _reconcile_indexes_and_demo(doc, profile, idoc, sink)
+
     # Fill the preserved cover anchors in place (never recreate the cover). Returns
     # the set of cover anchor refs the reconciliation CLEARED, for the destructive
     # floor below.
@@ -71,10 +82,6 @@ def generate(
     resolver = ProfileResolver(profile)
     for block in idoc.blocks:
         _write_block(doc, profile, resolver, block, sink)
-
-    # Reconcile the preserved derived indexes (TOC/TOF/TOT) and demo regions with
-    # the new content, comprehension-steered when present (no-op when absent).
-    removed_refs = _reconcile_indexes_and_demo(doc, profile, idoc, sink)
 
     # Refresh the preserved TOC (if any) so Word recomputes it on open - the new
     # headings written into the body will be picked up. No-op when there is no TOC.
