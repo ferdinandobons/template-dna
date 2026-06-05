@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="assets/hero.svg" alt="OfficeSkills - extract a company's Office template into a reusable Brand Profile, then generate unlimited on-brand Word, PowerPoint and Excel documents" width="100%" />
+<img src="assets/hero.svg" alt="OfficeSkills - extract a company's Word, PowerPoint or Excel template into a reusable Brand Profile, then generate unlimited on-brand documents of that same format" width="100%" />
 
 <br/>
 
-**Turn one company template into unlimited on-brand Word, PowerPoint and Excel documents.**
+**Turn a company's Word, PowerPoint or Excel template into unlimited on-brand documents of the same type.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3B82F6.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/)
@@ -37,7 +37,7 @@
 
 **OfficeSkills** is an **agent-skill bundle** - for Claude Code, Codex, and compatible AI agents - that turns a company's existing Office template into a **reusable brand memory**, then writes new documents that stay faithful to it.
 
-You give it one branded `.docx`, `.pptx`, or `.xlsx`. It **extracts** the brand - theme colors and fonts, named styles, the document's *structure*, layouts, cover anchors, logos and tables - into a portable **Brand Profile**. From then on, every document it **generates** is built *from the original template shell* and uses *only* the artifacts the template actually defines.
+You give it one branded `.docx`, `.pptx`, or `.xlsx`. It **extracts** the brand - theme colors and fonts, named styles, the document's *structure*, layouts, cover anchors, logos and tables - into a portable **Brand Profile**. From then on, every document it **generates** is built *from the original template shell* and uses *only* the artifacts the template actually defines. Each format stays in its own lane: a Word template makes Word documents, a deck makes decks, a workbook makes workbooks - there is no cross-format conversion.
 
 > **The core guarantee: off-brand output is impossible by construction.** No generator ever writes a literal style name, hex color, or font - those live only in the Brand Profile, and `verify` refuses a profile that points at anything the template doesn't contain. There is no "creative" path that drifts from the brand.
 
@@ -81,6 +81,8 @@ General-purpose document skills generate *freely* and only loosely imitate a ref
                           └─ full artifact catalog
 ```
 
+> **Same format throughout.** A `.docx` template yields `.docx` documents, a `.pptx` yields `.pptx`, a `.xlsx` yields `.xlsx`. Each skill is its own lane: there is no cross-format conversion.
+
 1. **Extract** unpacks the template's OOXML and records its brand: theme, named styles mapped to semantic **roles**, the **document structure** (the ordered skeleton plus which parts are fixed vs free), layouts, cover anchors, logos, and a complete artifact catalog. The original file is kept **byte-for-byte** as the *shell*.
 2. **Generate** turns your content into an **IntermediateDocument** of brand-agnostic typed blocks (heading, paragraph, callout, list, table, …). A **pure resolver** maps each block to the concrete brand artifact from the profile, fills the shell **in the template's structural order**, and saves.
 3. **Verify / QA** runs deterministic checks - every role resolves to a real artifact, only allowed styles are used, the palette holds, no residual template text remains, tables are intact - and, when LibreOffice is available, a visual pass.
@@ -106,7 +108,7 @@ So a generated report opens with the company cover, keeps a live table of conten
 | **`brand-pptx`** | PowerPoint `.pptx` | decks: title / section / content slides from the template's real masters & layouts, with long-text splitting |
 | **`brand-xlsx`** | Excel `.xlsx` | workbooks: fills named cells & regions while **preserving formulas** and workbook structure |
 
-All three expose the same three verbs: **`extract` → `verify` → `generate`**.
+All three expose the same three verbs: **`extract` → `verify` → `generate`** - each skill is self-contained and **same-format** (a Word template makes Word documents, never a deck or a sheet).
 
 ---
 
