@@ -119,6 +119,53 @@ class ProfileStoreError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
+# Name validation (path-traversal defense)
+# ---------------------------------------------------------------------------
+def _safe_name_segment(name: str) -> str:
+    """Validate ``name`` is a single, safe path segment for a store subdir.
+
+    A profile name maps directly to ``brand-kit/<name>``; it must therefore be
+    exactly one path component with no way to climb out of the store. We reject
+    (rather than silently rewrite) so a name always round-trips between
+    :func:`target_dir_for_save` and :func:`resolve_profile_dir`.
+
+    Refused: empty/whitespace, ``.`` / ``..``, any ``/`` or ``\\`` or
+    :data:`os.sep` / :data:`os.altsep`, NUL bytes, and absolute or
+    drive-qualified names. Everything else (e.g. ``acme``, ``deck-2024``) is
+    returned unchanged.
+
+    Raises:
+        ProfileStoreError: if ``name`` is not a safe single segment.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ProfileStoreError(f"invalid profile name: {name!r}")
+    bad = {"/", "\\", os.sep}
+    if os.altsep:
+        bad.add(os.altsep)
+    if any(ch in name for ch in bad) or "\x00" in name:
+        raise ProfileStoreError(f"profile name must be a single path segment: {name!r}")
+    if name in (".", ".."):
+        raise ProfileStoreError(f"profile name must be a single path segment: {name!r}")
+    # An absolute or drive-qualified name (e.g. ``/etc`` or ``C:\\x``) collapses
+    # the join and escapes the store; Path tells us if it has more than one part.
+    p = Path(name)
+    if p.is_absolute() or p.drive or len(p.parts) != 1 or p.parts[0] != name:
+        raise ProfileStoreError(f"profile name must be a single path segment: {name!r}")
+    return name
+
+
+def _assert_within(target: Path, root: Path, name: str) -> Path:
+    """Return ``target`` if it resolves inside ``root``; else raise (belt-and-braces)."""
+    try:
+        target.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ProfileStoreError(
+            f"profile name escapes the store root: {name!r}"
+        )
+    return target
+
+
+# ---------------------------------------------------------------------------
 # Hashing
 # ---------------------------------------------------------------------------
 def sha256_file(path: PathLike, *, chunk: int = 1 << 20) -> str:
@@ -163,12 +210,15 @@ def resolve_profile_dir(
     """
     if scope not in ("auto", "project", "global"):
         raise ValueError(f"scope must be auto|project|global, got {scope!r}")
+    safe = _safe_name_segment(name)
 
     candidates: list[tuple[str, Path]] = []
     if scope in ("auto", "project"):
-        candidates.append(("project", project_store_root(cwd) / name))
+        root = project_store_root(cwd)
+        candidates.append(("project", _assert_within(root / safe, root, name)))
     if scope in ("auto", "global"):
-        candidates.append(("global", global_store_root() / name))
+        root = global_store_root()
+        candidates.append(("global", _assert_within(root / safe, root, name)))
 
     for store_scope, directory in candidates:
         pj = directory / PROFILE_JSON
@@ -192,10 +242,13 @@ def target_dir_for_save(
     ``scope`` of ``"auto"`` resolves to the **project** store for writes (the
     same "project wins" bias). ``"project"`` / ``"global"`` are explicit.
     """
+    safe = _safe_name_segment(name)
     if scope in ("auto", "project"):
-        return project_store_root(cwd) / name
+        root = project_store_root(cwd)
+        return _assert_within(root / safe, root, name)
     if scope == "global":
-        return global_store_root() / name
+        root = global_store_root()
+        return _assert_within(root / safe, root, name)
     raise ValueError(f"scope must be auto|project|global, got {scope!r}")
 
 

@@ -57,8 +57,7 @@ class ProfileResolver:
         if isinstance(block, ir.Callout):
             return self.resolve_role(schema.role_id("callout", block.intent), fallback="paragraph")
         if isinstance(block, ir.ListBlock):
-            family = "number" if block.ordered else "bullet"
-            return self.resolve_role(schema.role_id("list", family, 1), fallback="paragraph")
+            return self.resolve_list_item(block, None)
         if isinstance(block, ir.Table):
             return self.resolve_role(schema.role_id("table", block.role or "default"), fallback=None)
         if isinstance(block, ir.Caption):
@@ -66,6 +65,22 @@ class ProfileResolver:
         if isinstance(block, ir.Quote):
             return self.resolve_role("quote", fallback="paragraph")
         return self.resolve_role("paragraph", fallback="paragraph")
+
+    def resolve_list_item(self, block: ir.ListBlock, item: Optional[ir.ListItem]) -> ResolvedOp:
+        """Resolve the list role for one item, honoring its nesting ``level``.
+
+        The list family (bullet/number) comes from the block; the *level* comes
+        from the item (``item.level`` is 0-based, role ids are 1-based, so
+        ``level+1``). When no per-level role exists in the profile the resolver
+        falls back to the level-1 list role, then to ``paragraph`` — so a deeply
+        nested item still gets a list style rather than being dropped.
+        """
+        family = "number" if block.ordered else "bullet"
+        level = (item.level + 1) if item is not None else 1
+        rid = schema.role_id("list", family, level)
+        if level > 1 and not schema.supports_role(self.profile, rid):
+            rid = schema.role_id("list", family, 1)
+        return self.resolve_role(rid, fallback="paragraph")
 
 
 def resolve_block(profile: dict, block: ir.Block, *, strict: bool = False) -> ResolvedOp:

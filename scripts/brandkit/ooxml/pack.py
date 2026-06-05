@@ -130,12 +130,22 @@ def unpack(src: PathLike, dest_dir: PathLike, *, overwrite: bool = True) -> Path
         if overwrite:
             shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
+    dest_resolved = dest.resolve()
     try:
         with zipfile.ZipFile(src_path, "r") as zf:
             for name in zf.namelist():
                 # Defend against zip-slip: reject entries that escape dest.
+                # Reject any '..' segment up front (covers backslash-style
+                # separators that Path won't split on POSIX), then confirm the
+                # resolved target is contained in dest via relative_to (a real
+                # containment check, not a broken string-prefix one that a
+                # sibling dir like ``dest_SIBLING`` would defeat).
+                if ".." in name.replace("\\", "/").split("/"):
+                    raise PackError(f"unsafe zip entry path: {name!r}")
                 target = (dest / name).resolve()
-                if not str(target).startswith(str(dest.resolve())):
+                try:
+                    target.relative_to(dest_resolved)
+                except ValueError:
                     raise PackError(f"unsafe zip entry path: {name!r}")
                 if name.endswith("/"):
                     target.mkdir(parents=True, exist_ok=True)

@@ -21,7 +21,7 @@ returns the generated `.docx`.
 
 ## Hard Rules
 
-- Treat `python scripts/cli.py ...` as an internal engine command, not the user-facing workflow.
+- Treat `python scripts/brandkit/cli.py ...` as an internal engine command, not the user-facing workflow.
 - Extract opens the source template read-only and saves `brand-kit/<name>/template/shell.docx` byte-for-byte.
 - Generate opens the saved shell and resolves every semantic block through `profile.json`.
 - Do not put style names, colors, fonts, or brand identifiers in an IntermediateDocument.
@@ -40,13 +40,13 @@ returns the generated `.docx`.
 ## Internal Extract
 
 ```bash
-python scripts/cli.py extract --name <brand> --template <template.docx> --scope project
+python scripts/brandkit/cli.py extract --name <brand> --template <template.docx> --scope project
 ```
 
 ## Internal Verify
 
 ```bash
-python scripts/cli.py verify --name <brand> --scope auto --qa auto
+python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
 ```
 
 Use `--qa fast` for deterministic L0 only. M1 degrades visual QA gracefully when render tools are absent.
@@ -54,7 +54,7 @@ Use `--qa fast` for deterministic L0 only. M1 degrades visual QA gracefully when
 ## Internal Generate
 
 ```bash
-python scripts/cli.py generate --name <brand> --input <intermediate-document.json> --output <output.docx> --scope auto --qa auto
+python scripts/brandkit/cli.py generate --name <brand> --input <intermediate-document.json> --output <output.docx> --scope auto --qa auto
 ```
 
 See `reference/profile-schema.md`, `reference/generation.md`, and `examples/intermediate-document.example.json`.

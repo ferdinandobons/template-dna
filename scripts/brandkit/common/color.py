@@ -122,7 +122,12 @@ def parse_theme_colors(theme_xml: bytes) -> dict[str, str]:
     """
     if _etree is None:  # pragma: no cover
         raise RuntimeError("lxml is required to parse theme colors")
-    root = _etree.fromstring(theme_xml)
+    # Route through the hardened OOXML parser (``resolve_entities=False``) so a
+    # malicious ``theme1.xml`` can't pull in external entities. Imported lazily
+    # to keep this module import-safe in degraded (no-lxml) envs.
+    from brandkit.ooxml.pack import parse_xml_bytes
+
+    root = parse_xml_bytes(theme_xml)
     scheme = root.find(f".//{_a('clrScheme')}")
     out: dict[str, str] = {}
     if scheme is None:

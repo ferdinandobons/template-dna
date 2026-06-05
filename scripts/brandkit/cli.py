@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             raise SystemExit("supported templates: .docx, .pptx, .xlsx")
         loaded = store.load_profile(args.name, args.scope)
-        report = run_qa(None, loaded.profile, mode="verify", qa="fast")
+        report = run_qa(None, loaded.profile, mode="verify", qa="fast", shell=loaded.shell_path)
         loaded.profile["verification"]["status"] = report.verdict
         loaded.profile["verification"]["roles_total"] = len(schema.list_role_ids(loaded.profile))
         loaded.profile["verification"]["roles_verified"] = loaded.profile["verification"]["roles_total"]
@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.passed else 1
     if args.cmd == "verify":
         loaded = store.load_profile(args.name, args.scope)
-        report = run_qa(None, loaded.profile, mode="verify", qa=args.qa)
+        report = run_qa(None, loaded.profile, mode="verify", qa=args.qa, shell=loaded.shell_path)
         loaded.profile["verification"]["status"] = report.verdict
         if args.accept and report.passed:
             loaded.profile.setdefault("verification", {})["accepted"] = True
@@ -89,9 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "generate":
         loaded = store.load_profile(args.name, args.scope)
         data = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        gen_findings: list = []
         try:
             if loaded.kind == "docx":
-                out = docx_generate.generate(loaded.profile, loaded.shell_path, parse_idoc(data), args.output)
+                out = docx_generate.generate(
+                    loaded.profile, loaded.shell_path, parse_idoc(data), args.output, findings=gen_findings
+                )
             elif loaded.kind == "pptx":
                 out = pptx_generate.generate(loaded.profile, loaded.shell_path, parse_idoc(data), args.output)
             elif loaded.kind == "xlsx":
@@ -101,7 +104,10 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"ERROR generate: {exc}")
             return 1
-        report = run_qa(out, loaded.profile, mode="generate", qa=args.qa)
+        report = run_qa(
+            out, loaded.profile, mode="generate", qa=args.qa,
+            shell=loaded.shell_path, extra_findings=gen_findings,
+        )
         for finding in report.findings:
             print(f"{finding.severity} {finding.check}: {finding.message}")
         print(f"generated {out}")

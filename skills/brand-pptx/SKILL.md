@@ -28,19 +28,19 @@ layouts, masters, placeholder geometry, slide texts, and slide size.
 ## Internal Extract
 
 ```bash
-python scripts/cli.py extract --name <brand> --template <template.pptx> --scope project
+python scripts/brandkit/cli.py extract --name <brand> --template <template.pptx> --scope project
 ```
 
 ## Internal Verify
 
 ```bash
-python scripts/cli.py verify --name <brand> --scope auto --qa auto
+python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
 ```
 
 ## Internal Generate
 
 ```bash
-python scripts/cli.py generate --name <brand> --input <intermediate-document.json> --output <output.pptx> --scope auto --qa auto
+python scripts/brandkit/cli.py generate --name <brand> --input <intermediate-document.json> --output <output.pptx> --scope auto --qa auto
 ```
 
 M2 supports title/content deck generation from the saved shell. Long content is

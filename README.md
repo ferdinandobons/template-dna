@@ -99,7 +99,7 @@ Check what's available at any time:
 python scripts/brandkit/cli.py doctor
 ```
 
-`doctor` reports your capability level and prints the exact install command for anything missing — it never fails the run.
+`doctor` lists each dependency (present or missing) and prints the exact install command for anything missing — it never fails the run.
 
 ### Install as an agent skill
 

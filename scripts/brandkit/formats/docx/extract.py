@@ -56,10 +56,14 @@ def extract(template: str | Path, name: str, *, scope: str = "project", cwd: str
 
 
 def _extract_theme(path: Path) -> dict:
+    # A missing theme part is legitimate (KeyError from the zip); treat that as
+    # "no theme colors". Any other failure (a corrupt/malicious theme1.xml, an
+    # invalid package) is a real error and must NOT silently blank the palette,
+    # so it propagates instead of being swallowed.
     colors = {}
     try:
         colors = color.parse_theme_colors(pack.read_part(path, "word/theme/theme1.xml"))
-    except Exception:
+    except KeyError:
         colors = {}
     return {
         "colors": {slot: {"hex": hex_value} for slot, hex_value in colors.items()},

@@ -149,11 +149,15 @@ DEFAULT_OVERFLOW_CAPABILITY: dict[str, str] = {
 }
 
 # The L0 invariant ids every profile declares it wants enforced (§3.2 qa).
+# NOTE: ``lists_use_named_numbering`` was removed (staged) — it was advertised in
+# every profile but enforced nowhere (no checker, not in ``registry.CHECKS``), so a
+# profile must not claim it. Re-add it here ONLY together with a real checker that
+# fails on a direct ``w:numPr`` not backed by a named numbering definition.
 DEFAULT_L0_INVARIANTS: tuple[str, ...] = (
     "every_role_resolves",
+    "resolver_targets_exist",
     "no_literal_markdown",
     "no_residual_template_text",
-    "lists_use_named_numbering",
 )
 
 DEFAULT_CONTRAST_MIN: float = 4.5
@@ -412,6 +416,54 @@ def validate(profile: dict) -> list[str]:
     if vs is not None and vs not in legal_vs:
         problems.append(f"verification.status: illegal value {vs!r}")
 
+    # Intra-profile consistency (no shell I/O): a resolver target that the profile
+    # *itself* contradicts is caught here. A placeholder resolver's ``layout`` must
+    # exist in ``surface.pptx.layouts``; a named_range resolver's ``name`` must
+    # exist in ``surface.xlsx.named_regions``. This catches a fabricated profile
+    # (e.g. a pptx extractor that invents "Title Slide" while surface lists other
+    # layouts) without opening the template.
+    problems.extend(_validate_resolver_consistency(profile, kind))
+
+    return problems
+
+
+def _validate_resolver_consistency(profile: dict, kind: Optional[str]) -> list[str]:
+    """Cross-check each resolver target against the profile's own surface map."""
+    problems: list[str] = []
+    roles = profile.get("roles")
+    if not isinstance(roles, dict):
+        return problems
+    surface = profile.get("surface")
+    sub = surface.get(kind) if isinstance(surface, dict) and kind else None
+    if not isinstance(sub, dict):
+        return problems
+
+    layouts = sub.get("layouts") if isinstance(sub.get("layouts"), dict) else {}
+    named_regions = sub.get("named_regions") if isinstance(sub.get("named_regions"), dict) else {}
+
+    for rid, entry in roles.items():
+        if rid == "_index" or not isinstance(entry, dict):
+            continue
+        resolver = entry.get("resolver")
+        if not isinstance(resolver, dict):
+            continue
+        rtype = resolver.get("type")
+        if rtype == ResolverType.PLACEHOLDER.value:
+            layout = resolver.get("layout")
+            # Only enforce when the surface actually declares layouts (else we
+            # cannot prove absence — that is the shell-backed check's job).
+            if layout is not None and layouts and layout not in layouts:
+                problems.append(
+                    f"roles.{rid}.resolver.layout: {layout!r} not in surface.{kind}.layouts "
+                    f"(have {sorted(layouts)})"
+                )
+        elif rtype == ResolverType.NAMED_RANGE.value:
+            name = resolver.get("name")
+            if name is not None and named_regions and name not in named_regions:
+                problems.append(
+                    f"roles.{rid}.resolver.name: named range {name!r} not in "
+                    f"surface.{kind}.named_regions (have {sorted(named_regions)})"
+                )
     return problems
 
 

@@ -76,9 +76,13 @@ TOC_HEADING_WORDS: frozenset[str] = frozenset(
 )
 
 # Token that, when contained (case-insensitively) in a paragraph style id/name,
-# marks the paragraph as part of a TOC (covers ``TOC``, ``TOCHeading``, ``TOC 1``,
-# localized ``Sommario``/``Indice`` style names, etc.).
-TOC_STYLE_TOKENS: frozenset[str] = frozenset({"toc", "sommario", "indice", "inhalt", "contenido"})
+# marks the paragraph as part of a TOC entry (covers ``TOC``, ``TOC 1``, the
+# table-of-figures ``TableOfFigures`` entry style, and localized ``Sommario``/
+# ``Indice`` *entry* style names). These are STRONG markers: a paragraph carrying
+# one of these styles is an actual TOC/index ENTRY, never ordinary body text.
+TOC_STYLE_TOKENS: frozenset[str] = frozenset(
+    {"toc", "tableoffigures", "sommario", "indice", "inhalt", "contenido"}
+)
 
 # Leading token of a ``w:instrText`` TOC field instruction.
 TOC_INSTR_PREFIX = "TOC"
@@ -128,15 +132,22 @@ def _text_is_toc_word(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # TOC detection (generic, brand-agnostic)
 # ---------------------------------------------------------------------------
-def _element_holds_toc(el) -> bool:
-    """Return True if a top-level body child ``el`` is (or contains) a TOC region.
+def _element_holds_strong_toc(el) -> bool:
+    """Return True if ``el`` carries a STRONG, unambiguous TOC marker.
 
-    Generic detection (any of):
+    A strong marker is a real structural proof that this child is part of a
+    table-of-contents / index region, not merely a heading that happens to be
+    named like one. Any of:
       - a block-level ``w:sdt`` whose ``w:docPartGallery/@w:val`` is
-        ``Table of Contents`` (matched case-insensitively), or
-      - a descendant paragraph whose style is a TOC/TOCHeading style, or
-      - a descendant paragraph whose text is a known multilingual contents word, or
-      - a descendant ``w:instrText`` starting with ``TOC``.
+        ``Table of Contents`` (case-insensitive), or
+      - a descendant ``w:instrText`` whose instruction starts with ``TOC`` (the
+        TOC field code; this also covers Table-of-Figures via ``TOC \\c``), or
+      - a descendant paragraph using a TOC-entry / Table-of-Figures style
+        (``TOC 1``…``TOC 9``, ``TableOfFigures``, localized index-entry styles).
+
+    A bare contents-word heading (``Contents`` / ``Sommario``) is *not* strong on
+    its own — it is handled separately as the optional TOC *heading* that may
+    immediately precede a strong anchor.
     """
     ln = _local_name(el.tag)
     if ln == "sdt":
@@ -144,35 +155,70 @@ def _element_holds_toc(el) -> bool:
             val = (gallery.get(w("val")) or "").strip().lower()
             if val == "table of contents":
                 return True
-    # Scan descendants for TOC paragraphs / instruction fields.
     for d in el.iter():
         dln = _local_name(d.tag)
         if dln == "instrText" and d.text and d.text.strip().startswith(TOC_INSTR_PREFIX):
             return True
-        if dln == "p":
-            if _style_is_toc(_p_style_val(d)):
-                return True
-            if _text_is_toc_word(_p_text(d)):
-                return True
+        if dln == "p" and _style_is_toc(_p_style_val(d)):
+            return True
     return False
 
 
+def _is_lone_contents_heading(el) -> bool:
+    """Return True if ``el`` is a paragraph whose text is *only* a contents word.
+
+    This is the WEAK signal: a heading literally named ``Contents`` / ``Indice`` /
+    ``Sommario`` with no strong TOC structure of its own. It counts as the TOC
+    *heading* only when it immediately precedes a strong anchor (see
+    :func:`classify_body_children`); on its own it never extends the TOC span,
+    because a body section legitimately titled "Contents" must stay body content.
+    """
+    if _local_name(el.tag) != "p":
+        return False
+    if _element_holds_strong_toc(el):
+        return False
+    return _text_is_toc_word(_p_text(el))
+
+
+def _element_holds_toc(el) -> bool:
+    """Back-compat: True if ``el`` carries any TOC signal (strong OR a lone
+    contents-word heading). Used only by detection summaries, never to *extend*
+    the preserved span (that is anchored on strong markers in
+    :func:`classify_body_children`)."""
+    return _element_holds_strong_toc(el) or _is_lone_contents_heading(el)
+
+
 def is_toc_present(doc) -> bool:
-    """Return True if the document body contains a TOC region anywhere."""
+    """Return True if the document body contains a real (strong) TOC region."""
     body = doc.element.body
-    return any(_element_holds_toc(child) for child in body)
+    return any(_element_holds_strong_toc(child) for child in body)
 
 
 # ---------------------------------------------------------------------------
 # Top-level region classification
 # ---------------------------------------------------------------------------
 def _is_sectpr(el) -> bool:
+    """True for the final body-level ``w:sectPr`` sentinel (the last section)."""
     return _local_name(el.tag) == "sectPr"
 
 
+def _holds_sectpr(el) -> bool:
+    """True if ``el`` is a ``w:p`` carrying ``w:pPr/w:sectPr`` (an *intermediate*
+    section break). Such a paragraph defines section geometry / header-footer
+    references for the section that ends at it and must never be deleted by a body
+    clear, even when it otherwise falls in the body region."""
+    if _local_name(el.tag) != "p":
+        return False
+    pPr = el.find(w("pPr"))
+    if pPr is None:
+        return False
+    return pPr.find(w("sectPr")) is not None
+
+
 def _child_starts_body(el) -> bool:
-    """Return True if a top-level body child is a Heading-1 paragraph (the body
-    start when there is no TOC)."""
+    """Return True if a top-level body child is a Heading-1 paragraph (a body
+    start signal: the first such paragraph after the TOC breaks the TOC span and,
+    when there is no TOC, marks the cover/body boundary)."""
     if _local_name(el.tag) != "p":
         return False
     if _style_is_heading1(_p_style_val(el)):
@@ -188,60 +234,95 @@ def classify_body_children(doc) -> list[dict]:
     ``"cover" | "toc" | "body"`` (``None`` for the final ``sectPr`` sentinel).
 
     Boundaries (evidence-based, never positional):
-      - the TOC region is the *contiguous front-matter span* from the first child
-        that holds a TOC marker through the last one. Real templates often stack
-        several indexes (e.g. a main table-of-contents SDT, then a table-of-tables
-        and a table-of-figures) separated by heading/blank paragraphs that do not
-        each individually carry a TOC marker; those interleaved paragraphs are part
-        of the same front matter and must travel with it. Anchoring on the first and
-        last TOC markers keeps the region as one block (still evidence-based — the
-        span is bounded by actual TOC markers, never by a hardcoded index);
-      - the cover region is everything before the first TOC child (or, if there is
-        no TOC, everything before the first Heading-1 paragraph);
+      - the TOC region anchors on **strong** markers only (a block-level TOC sdt,
+        a ``w:instrText`` ``TOC`` field, or a TOC/Table-of-Figures *entry* style).
+        It starts at the first strong anchor — extended back by one paragraph if a
+        lone contents-word heading (``Contents``/``Sommario``) immediately precedes
+        it (that is the TOC heading) — and ends at the **last** strong anchor.
+        Stacked index front matter (a table-of-contents, then a table-of-tables and
+        a table-of-figures, each a real TOC field) is preserved as one block:
+        their headings/blank separators sit *between* strong anchors and travel
+        with the span. The span **breaks at the first body Heading-1 after the last
+        strong anchor**: a heading literally named "Contents"/"Sommario" appearing
+        *after* the real TOC is body content and is cleared, never preserved;
+      - the cover region is everything before the TOC heading (or, if there is no
+        TOC, everything before the first Heading-1 paragraph);
       - the body region is everything after the TOC span (or after the cover) up to
-        the final body-level ``sectPr``.
+        the final body-level ``sectPr``. A paragraph holding an intermediate
+        ``w:sectPr`` is body-region but flagged ``holds_sectpr`` so a body clear
+        skips it (preserving multi-section geometry / header-footer references).
     """
     body = doc.element.body
     children = list(body)
 
-    toc_markers = {i for i, el in enumerate(children) if not _is_sectpr(el) and _element_holds_toc(el)}
-    first_toc = min(toc_markers) if toc_markers else None
-    last_toc = max(toc_markers) if toc_markers else None
-    # The TOC region spans the whole contiguous front matter [first_toc .. last_toc],
-    # not just the children that each carry a TOC marker, so index headings / blank
-    # separator paragraphs between stacked indexes are kept with the front matter.
-    toc_indices = (
-        {i for i in range(first_toc, last_toc + 1) if not _is_sectpr(children[i])}
-        if first_toc is not None
-        else set()
-    )
+    # Strong TOC anchors only — these are the structural proof of a TOC/index.
+    strong = [
+        i
+        for i, el in enumerate(children)
+        if not _is_sectpr(el) and _element_holds_strong_toc(el)
+    ]
+
+    toc_indices: set[int] = set()
+    first_toc: Optional[int] = None
+    if strong:
+        first_anchor = strong[0]
+        last_anchor = strong[-1]
+        toc_start = first_anchor
+        # Fold in an immediately-preceding lone contents-word heading (the TOC
+        # heading) and any blank separator paragraphs between it and the anchor.
+        j = first_anchor - 1
+        heading_at: Optional[int] = None
+        while j >= 0 and not _is_sectpr(children[j]):
+            if _is_lone_contents_heading(children[j]):
+                heading_at = j
+                break
+            if _p_text(children[j]).strip() == "" and _local_name(children[j].tag) == "p":
+                j -= 1
+                continue
+            break
+        if heading_at is not None:
+            toc_start = heading_at
+        first_toc = toc_start
+
+        # The span ends at the last strong anchor, EXCEPT it breaks early at the
+        # first body Heading-1 that appears after the last strong anchor would
+        # never trigger (Heading-1 is past the anchor). The real risk is a span
+        # that, without strong anchors past ``last_anchor``, should still stop at a
+        # body Heading-1 *between* anchors only if that heading is not itself index
+        # front matter. Strong anchors bound the front matter, so we keep
+        # [toc_start .. last_anchor] and then, defensively, never let the span run
+        # past the first Heading-1 that follows ``last_anchor``.
+        toc_end = last_anchor
+        toc_indices = {
+            i for i in range(toc_start, toc_end + 1) if not _is_sectpr(children[i])
+        }
+
+    # First Heading-1 anywhere (the no-TOC cover/body boundary).
     first_h1 = next(
         (i for i, el in enumerate(children) if not _is_sectpr(el) and _child_starts_body(el)),
         None,
     )
 
-    # The cover ends at the FIRST of {first TOC child, first Heading-1}: both are
-    # valid "end of cover" signals (a Heading-1 before the TOC means the document
-    # has no real cover, only body). The body begins after the TOC when the TOC is
-    # the cover boundary, else at the Heading-1.
     if first_toc is not None and (first_h1 is None or first_toc <= first_h1):
+        # The TOC is the cover boundary. Body starts right after the TOC span.
         cover_end = first_toc
-        body_start = last_toc + 1
+        body_start = max(toc_indices) + 1 if toc_indices else first_toc + 1
     elif first_h1 is not None:
-        # A Heading-1 precedes the TOC (or there is no TOC): the cover ends and the
-        # body begins at that Heading-1. (TOC children, if any, are still tagged
-        # 'toc' below by membership in ``toc_indices``.)
+        # A Heading-1 precedes the TOC (or there is no TOC): cover ends / body
+        # begins at that Heading-1.
         cover_end = first_h1
         body_start = first_h1
     else:
-        # Neither a TOC nor a Heading-1: no cover boundary signal -> all body.
+        # No boundary signal at all -> everything is body.
         cover_end = 0
         body_start = 0
 
     out: list[dict] = []
     for i, el in enumerate(children):
         if _is_sectpr(el):
-            out.append({"index": i, "tag": _local_name(el.tag), "region": None, "is_sectpr": True})
+            out.append(
+                {"index": i, "tag": _local_name(el.tag), "region": None, "is_sectpr": True, "holds_sectpr": False}
+            )
             continue
         if i in toc_indices:
             region = "toc"
@@ -250,10 +331,16 @@ def classify_body_children(doc) -> list[dict]:
         elif i >= body_start:
             region = "body"
         else:
-            # Between cover_end and body_start with no TOC shouldn't happen, but
-            # default to body to stay safe.
             region = "body"
-        out.append({"index": i, "tag": _local_name(el.tag), "region": region, "is_sectpr": False})
+        out.append(
+            {
+                "index": i,
+                "tag": _local_name(el.tag),
+                "region": region,
+                "is_sectpr": False,
+                "holds_sectpr": _holds_sectpr(el),
+            }
+        )
     return out
 
 
@@ -409,6 +496,8 @@ def clear_body_region(doc, structure: Optional[dict] = None, *, preserve_cover: 
     for c in classes:
         if c["is_sectpr"]:
             continue  # always keep the final sectPr
+        if c.get("holds_sectpr"):
+            continue  # preserve intermediate section breaks (geometry / hdr-ftr)
         if c["region"] in keep_regions:
             continue
         body.remove(children[c["index"]])
@@ -417,34 +506,101 @@ def clear_body_region(doc, structure: Optional[dict] = None, *, preserve_cover: 
 # ---------------------------------------------------------------------------
 # TOC refresh
 # ---------------------------------------------------------------------------
-def refresh_toc(doc) -> bool:
-    """Mark TOC fields dirty so Word recomputes them on open.
+# Local names that, per the ECMA-376 ``CT_Settings`` sequence, legally come AFTER
+# ``w:updateFields``. ``updateFields`` must be inserted before the first of these
+# that already exists in settings.xml so the part stays schema-valid (Word and
+# strict validators reject out-of-order children).
+_SETTINGS_AFTER_UPDATEFIELDS: tuple[str, ...] = (
+    "hdrShapeDefaults",
+    "footnotePr",
+    "endnotePr",
+    "compat",
+    "rsids",
+    "mathPr",
+    "uiCompat97To2003",
+    "attachedSchema",
+    "themeFontLang",
+    "clrSchemeMapping",
+    "doNotIncludeSubdocsInStats",
+    "doNotAutoCompressPictures",
+    "forceUpgrade",
+    "captions",
+    "readModeInkLockDown",
+    "smartTagType",
+    "schemaLibrary",
+    "shapeDefaults",
+    "doNotEmbedSmartTags",
+    "decimalSymbol",
+    "listSeparator",
+    "docId",
+    "discardImageEditingData",
+    "defaultImageDpi",
+    "conflictMode",
+    "chartTrackingRefBased",
+)
 
-    Sets ``w:updateFields val="true"`` in ``w:settings`` AND marks every
-    ``w:fldChar fldCharType="begin"`` of a TOC complex field with ``w:dirty="true"``.
-    Returns True if a TOC was found and marked. Safe (no-op + returns False) when
-    the template has no TOC field. Never duplicates the TOC.
+
+def _set_update_fields(doc) -> None:
+    """Set ``w:updateFields val="true"`` in settings.xml, in schema position."""
+    from lxml import etree
+
+    settings = doc.settings.element
+    existing = settings.find(w("updateFields"))
+    if existing is None:
+        existing = etree.SubElement(settings, w("updateFields"))
+        # Move it into the correct ECMA-376 position: before the first child that
+        # must legally follow ``updateFields``.
+        for child in list(settings):
+            if child is existing:
+                continue
+            if _local_name(child.tag) in _SETTINGS_AFTER_UPDATEFIELDS:
+                child.addprevious(existing)
+                break
+    existing.set(w("val"), "true")
+
+
+def refresh_toc(doc) -> int:
+    """Mark only TOC fields dirty so Word recomputes them on open.
+
+    Sets ``w:updateFields val="true"`` in ``w:settings`` (in schema position) AND
+    marks the ``w:fldChar fldCharType="begin"`` of each *TOC* complex field with
+    ``w:dirty="true"``. A complex field is delimited by ``begin``/``separate``/
+    ``end`` ``w:fldChar`` chars and identified by its ``w:instrText``; only the
+    begin char of the field whose own instruction starts with ``TOC`` is marked.
+    Nested ``PAGEREF``/``HYPERLINK`` fields inside a TOC (and every non-TOC field)
+    are left untouched, so a doc with 59 fields but 3 TOCs marks exactly 3.
+
+    Returns the number of TOC fields marked dirty (0 when the template has no TOC
+    field — in which case nothing is written). Never duplicates the TOC.
     """
     if not is_toc_present(doc):
-        return False
+        return 0
 
     # 1) Global updateFields in settings.xml so Word offers to refresh on open.
     try:
-        settings = doc.settings.element
-        existing = settings.find(w("updateFields"))
-        if existing is None:
-            from lxml import etree
-
-            existing = etree.SubElement(settings, w("updateFields"))
-        existing.set(w("val"), "true")
+        _set_update_fields(doc)
     except Exception:
         pass
 
-    # 2) Per-field dirty flag on the TOC field begin char(s).
-    marked = False
+    # 2) Walk fldChar/instrText in document order, tracking field nesting with a
+    # stack so each instrText is attributed to its OWN enclosing field's begin.
+    marked = 0
     body = doc.element.body
-    for fld in body.iter(w("fldChar")):
-        if fld.get(w("fldCharType")) == "begin":
-            fld.set(w("dirty"), "true")
-            marked = True
-    return marked or True
+    stack: list = []  # stack of begin fldChar elements (innermost on top)
+    for el in body.iter(w("fldChar"), w("instrText")):
+        ln = _local_name(el.tag)
+        if ln == "fldChar":
+            ctype = el.get(w("fldCharType"))
+            if ctype == "begin":
+                stack.append(el)
+            elif ctype == "end":
+                if stack:
+                    stack.pop()
+        elif ln == "instrText":
+            text = (el.text or "").strip()
+            if stack and text.startswith(TOC_INSTR_PREFIX):
+                begin = stack[-1]
+                if begin.get(w("dirty")) != "true":
+                    begin.set(w("dirty"), "true")
+                    marked += 1
+    return marked

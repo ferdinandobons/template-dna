@@ -255,6 +255,7 @@ def name_token_score(style_name: str, role_family: str) -> float:
 def tokenize_name(style_name: str) -> list[str]:
     """Split a style display name into lowercased alphanumeric tokens.
 
-    Used by the noise-token frequency analysis (e.g. detecting that a brand token recurs across many style names). Splits on any non-alphanumeric.
+    Used by the noise-token frequency analysis (e.g. detecting that a company
+    name token recurs across many style names). Splits on any non-alphanumeric.
     """
     return [t for t in re.split(r"[^0-9A-Za-z]+", (style_name or "").lower()) if t]

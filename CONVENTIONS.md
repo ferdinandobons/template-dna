@@ -22,11 +22,24 @@ Every skill (`brand-docx`, `brand-pptx`, `brand-xlsx`) implements the same contr
 | Verb | Input | Output |
 |---|---|---|
 | **extract** | a company `.docx`/`.pptx`/`.xlsx` template | a reusable **Brand Profile** |
-| **verify** | a saved Brand Profile | a QA report + a rendered proof + a role-mapping table |
+| **verify** | a saved Brand Profile | QA findings + a verdict (the role map lives in `PROFILE.md`) |
 | **generate** | content (free text or an IntermediateDocument) + a profile | a new on-brand document |
 
-Invocation is by **bare relative path**: `python scripts/cli.py extract --name <brand> --template <t>`.
-`${CLAUDE_PLUGIN_ROOT}` never appears in author-facing SKILL.md.
+`verify` reports deterministic QA findings and a verdict; it does **not** render a
+proof image, and the role-mapping table is written to `PROFILE.md` at extract time
+(not re-emitted by verify). Pass `verify --accept` to mark a passing profile as
+accepted (`verification.accepted = true`).
+
+The canonical engine entrypoint is `scripts/brandkit/cli.py`, run from the plugin
+root (the directory containing `.claude-plugin/`):
+
+```bash
+python scripts/brandkit/cli.py extract --name <brand> --template <t>
+```
+
+Set `TEMPLATE_DNA_ROOT` to the plugin root to invoke the CLI from any working
+directory (the skill `cli.py` shims honor it; if unset they walk up to the nearest
+`.claude-plugin/`). `${CLAUDE_PLUGIN_ROOT}` never appears in author-facing SKILL.md.
 
 ---
 
@@ -37,18 +50,24 @@ relative to the profile root, so it can move between stores unchanged.
 
 ```
 brand-kit/<name>/
-├─ profile.json          # the index: schema-versioned envelope
-├─ PROFILE.md            # human-readable palette + role table
+├─ profile.json          # the index: schema-versioned envelope          [always]
+├─ PROFILE.md            # human-readable palette + role table            [always]
 ├─ template/
-│  └─ shell.<ext>        # the byte-for-byte shell the generator opens FROM
-├─ assets/               # logos + manifest.json
-├─ components/           # reusable fragments + index.json
-├─ sections/             # multi-page/slide units + index.json
-├─ specimens/            # opaque chart/SmartArt captures
-├─ samples/              # source.png (template) + smoke.png (generated proof)
-├─ provenance.sha256     # the shell hash (drift detection)
-└─ .cache/               # resolved-hex / render caches (safe to delete)
+│  └─ shell.<ext>        # the byte-for-byte shell the generator opens FROM [always]
+├─ provenance.sha256     # the shell hash (drift detection)               [always]
+├─ assets/               # logos + manifest.json                          [optional]
+├─ components/           # reusable fragments + index.json                [optional]
+├─ sections/             # multi-page/slide units + index.json            [optional]
+├─ specimens/            # opaque chart/SmartArt captures                 [optional]
+├─ samples/              # source.png (template) + smoke.png (proof)      [optional]
+└─ .cache/               # resolved-hex / render caches (safe to delete)  [optional]
 ```
+
+The four `[always]` entries are written by every extract. The `[optional]` subdirs
+are produced **only when the template supplies the corresponding artifacts** (e.g.
+`assets/` only when logos are captured, `samples/` only when render tools rendered a
+proof); a plain extract of a logo-free template yields just the four always-present
+entries.
 
 The binary shell is **byte-for-byte** (never round-tripped from JSON). The JSON
 **describes and points; the shell IS the brand.**
@@ -104,7 +123,22 @@ below `robust`.
 **`INFO` | `WARNING` | `ERROR`**.
 
 ### Verification status — `VerificationStatus`
-**`passed` | `passed_with_warnings` | `failed` | `unverified`**.
+**`passed` | `passed_with_warnings` | `failed` | `unverified`**. Stamped into
+`verification.status`. `verify --accept` additionally sets `verification.accepted =
+true` when the run passed (and is a no-op otherwise).
+
+### Optional extractor-added top-level keys
+Beyond the required envelope keys (`REQUIRED_TOP_KEYS` in `schema.py`), each
+extractor stamps two **optional** top-level objects (not validated by `validate()`,
+so 1.0.0 profiles may omit them):
+- **`artifact_catalog`** — a broad, descriptive inventory of the template beyond the
+  directly-generatable roles: OOXML/media parts, styles, sections/margins, and
+  format-specific extras (docx: paragraph samples + table counts; pptx: layouts,
+  masters, placeholder geometry, slide texts, slide size; xlsx: named ranges,
+  formulas, sheet dimensions, tables, merged cells, row/column sizing, number
+  formats). Read it to mimic a specific template piece; it is **not** a resolver.
+- **`capabilities`** — what this profile can generate today, per kind. Descriptive
+  only; the resolver and QA gate are the enforcement, not this key.
 
 ### Anchor kind — `AnchorKind`
 **`sdt_anchored` | `placeholder` | `named_range` | `NONE`**. Anchor presence is
