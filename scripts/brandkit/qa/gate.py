@@ -80,6 +80,10 @@ def run_qa(
     if extra_findings:
         findings = findings + list(extra_findings)
 
+    # The saved shell is part of the verified brand contract. If it drifted from
+    # the profile's recorded sha, verification/generation must fail closed.
+    findings = findings + checks_deterministic.check_shell_provenance(shell, profile)
+
     findings = findings + _run_visual_audit(
         target, profile, qa=qa, out_dir=out_dir, visual=visual,
     )

@@ -27,7 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from brandkit.common import color
 from brandkit.ooxml import pack
+from brandkit.profile import schema
 from brandkit.profile import store
+from brandkit.qa.gate import run_qa
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +86,46 @@ class NameTraversalTest(unittest.TestCase):
                         )
                     )
                     self.assertEqual(target.name, name)
+
+    @unittest.skipIf(os.name == "nt", "symlink setup differs on Windows")
+    def test_save_profile_refuses_symlink_escape_for_shell(self) -> None:
+        """A pre-existing profile symlink must not let shell writes escape store."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            outside = root / "outside"
+            outside.mkdir()
+            victim = outside / "shell.docx"
+            victim.write_bytes(b"old")
+
+            profile_dir = root / "brand-kit" / "acme"
+            profile_dir.mkdir(parents=True)
+            (profile_dir / "template").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaises(store.ProfileStoreError):
+                store.save_profile(profile_dir, {"kind": "docx"}, b"new")
+            self.assertEqual(victim.read_bytes(), b"old")
+
+
+# ---------------------------------------------------------------------------
+# Provenance drift - shell hash must be load-bearing in QA
+# ---------------------------------------------------------------------------
+class ProvenanceDriftTest(unittest.TestCase):
+    def test_run_qa_fails_when_shell_hash_drifted(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            shell = Path(td) / "shell.docx"
+            shell.write_bytes(b"original-shell")
+            profile = schema.build_envelope("docx", {"name": "acme"})
+            profile["provenance"]["shell"]["path"] = "template/shell.docx"
+            profile["provenance"]["shell"]["sha256"] = store.sha256_file(shell)
+
+            shell.write_bytes(b"tampered-shell")
+            report = run_qa(None, profile, mode="verify", qa="fast", shell=shell)
+
+            self.assertFalse(report.passed)
+            self.assertTrue(
+                any(f.check == "shell_provenance" and f.severity == schema.Severity.ERROR.value
+                    for f in report.findings)
+            )
 
 
 # ---------------------------------------------------------------------------

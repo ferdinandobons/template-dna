@@ -11,16 +11,19 @@ binaries are present (skipped in CI).
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from docx import Document
 from PIL import Image, ImageDraw
 
+from brandkit import doctor
 from brandkit.profile import schema
 from brandkit.qa import gate
 from brandkit.qa import visual as vqa
@@ -137,6 +140,53 @@ class L1ProxyTest(unittest.TestCase):
         self.assertEqual(
             vqa.check_page_count_sane([_blank()]), []
         )
+
+
+class RendererAvailabilityTest(unittest.TestCase):
+    def test_probe_marks_visual_unavailable_when_binary_probe_fails(self) -> None:
+        """PATH presence alone is not enough; broken renderers must degrade."""
+        orig_which = doctor.shutil.which
+        orig_run = subprocess.run
+        try:
+            doctor.shutil.which = lambda name: f"/fake/{name}"
+
+            def fake_run(*args, **kwargs):
+                return SimpleNamespace(returncode=134, stdout=b"", stderr=b"abort")
+
+            subprocess.run = fake_run
+            status = doctor.probe()
+        finally:
+            doctor.shutil.which = orig_which
+            subprocess.run = orig_run
+
+        self.assertFalse(status["binaries"]["soffice"])
+        self.assertFalse(status["visual_qa"])
+
+    def test_probe_marks_visual_unavailable_when_conversion_probe_fails(self) -> None:
+        """Version commands can pass while headless conversion is unusable."""
+        orig_which = doctor.shutil.which
+        orig_run = subprocess.run
+        calls = []
+        try:
+            doctor.shutil.which = lambda name: f"/fake/{name}"
+
+            def fake_run(args, *unused_args, **unused_kwargs):
+                calls.append(list(args))
+                if "--convert-to" in args:
+                    return SimpleNamespace(returncode=134, stdout=b"", stderr=b"abort")
+                return SimpleNamespace(returncode=0, stdout=b"version ok", stderr=b"")
+
+            subprocess.run = fake_run
+            status = doctor.probe()
+        finally:
+            doctor.shutil.which = orig_which
+            subprocess.run = orig_run
+
+        self.assertTrue(status["binaries"]["soffice"])
+        self.assertTrue(status["binaries"]["pdftoppm"])
+        self.assertFalse(status["visual_qa"])
+        self.assertIn("soffice convert failed", status["binary_errors"]["visual_qa"])
+        self.assertTrue(any("--convert-to" in call for call in calls))
 
 
 # ---------------------------------------------------------------------------

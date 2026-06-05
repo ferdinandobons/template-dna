@@ -328,6 +328,8 @@ def save_profile(
     ext = schema.KIND_EXTENSION[kind]
 
     root = Path(directory)
+    if root.is_symlink():
+        raise ProfileStoreError(f"refusing to write profile through symlink: {root}")
     pj = root / PROFILE_JSON
     if pj.exists() and not overwrite:
         raise ProfileStoreError(f"profile already exists at {root} (overwrite=False)")
@@ -335,10 +337,8 @@ def save_profile(
 
     # 1) Write the shell verbatim and stamp its hash into provenance.
     shell_rel = f"template/shell.{ext}"
-    shell_abs = root / shell_rel
-    shell_abs.parent.mkdir(parents=True, exist_ok=True)
-    shell_abs.write_bytes(shell_bytes)
     shell_hash = sha256_bytes(shell_bytes)
+    _write_under(root, shell_rel, shell_bytes)
 
     prov = profile.setdefault("provenance", {})
     shell_block = prov.setdefault("shell", {})

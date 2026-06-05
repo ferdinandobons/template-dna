@@ -2,6 +2,7 @@
 """Deterministic L0 checks for M1."""
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from docx import Document
@@ -23,6 +24,64 @@ def check_profile(profile: dict) -> list[Finding]:
         if not entry or not entry.get("resolver"):
             findings.append(Finding("every_role_resolves", schema.Severity.ERROR.value, f"{rid} has no resolver"))
     return findings
+
+
+def check_shell_provenance(shell, profile: dict) -> list[Finding]:
+    """ERROR when the saved shell no longer matches profile provenance.
+
+    The Brand Profile records ``provenance.shell.sha256`` at extraction time. A
+    later hand edit, corrupt copy, or tamper must be load-bearing in QA: generation
+    from a drifted shell is not the same brand contract the profile verified.
+    """
+    if shell is None:
+        return []
+    recorded = (
+        (profile.get("provenance") or {}).get("shell") or {}
+    ).get("sha256")
+    if not recorded:
+        return []
+
+    shell_path = Path(shell)
+    if not shell_path.is_file():
+        return [
+            Finding(
+                "shell_provenance",
+                schema.Severity.ERROR.value,
+                f"recorded shell hash exists but shell is missing: {shell_path}",
+                location=str(shell_path),
+            )
+        ]
+
+    try:
+        actual = _sha256_file(shell_path)
+    except OSError as exc:
+        return [
+            Finding(
+                "shell_provenance",
+                schema.Severity.ERROR.value,
+                f"could not hash shell {shell_path}: {exc}",
+                location=str(shell_path),
+            )
+        ]
+
+    if actual != recorded:
+        return [
+            Finding(
+                "shell_provenance",
+                schema.Severity.ERROR.value,
+                f"shell hash drifted: recorded {recorded}, actual {actual}",
+                location=str(shell_path),
+            )
+        ]
+    return []
+
+
+def _sha256_file(path: Path, *, chunk: int = 1 << 20) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 def check_resolver_targets(shell, profile: dict) -> list[Finding]:
