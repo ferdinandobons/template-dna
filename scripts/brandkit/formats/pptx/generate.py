@@ -535,7 +535,7 @@ def _add_native_table(slide, prs, table: ir.Table, body_placeholder=None) -> Non
 def _table_column_count(table: ir.Table) -> int:
     counts = [len(table.columns)]
     counts.extend(len(row) for row in table.rows)
-    return max(counts or [0])
+    return max(counts)
 
 
 def _table_header_text(table: ir.Table, index: int) -> str:
@@ -863,16 +863,6 @@ def _append_list_item(lines: list[BodyLine], item) -> None:
         lines.append(BodyLine(text=text, indent=max(item.level, 0)))
     for sub in item.items:
         _append_list_item(lines, sub)
-
-
-def _append_table(lines: list[BodyLine], table) -> None:
-    header = [textutil.runs_to_text([c]) if isinstance(c, dict) else str(c) for c in table.columns]
-    if any(header):
-        lines.append(BodyLine(text="\t".join(header)))
-    for row in table.rows:
-        lines.append(BodyLine(text="\t".join(textutil.runs_to_text(cell.runs) for cell in row)))
-    if table.caption:
-        _append(lines, textutil.runs_to_text(table.caption))
 
 
 # ---------------------------------------------------------------------------

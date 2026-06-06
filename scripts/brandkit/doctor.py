@@ -425,24 +425,19 @@ def install_hints(status: dict) -> list[str]:
             "install:python: "
             f"{PYTHON_INSTALL_HINT}  # missing: {', '.join(sorted(missing_python))}"
         )
-    for name, ok in status.get("binaries", {}).items():
-        if ok:
-            continue
-        path = (status.get("binary_paths") or {}).get(name)
-        action = "repair" if path else "install"
-        detail = f" ({path})" if path else ""
-        hint = OPTIONAL_INSTALL_HINTS.get(name)
-        if hint:
-            hints.append(f"{action}:{name}{detail}: {hint}")
-    for name, ok in (status.get("ocr_binaries") or {}).items():
-        if ok:
-            continue
-        path = (status.get("ocr_binary_paths") or {}).get(name)
-        action = "repair" if path else "install"
-        detail = f" ({path})" if path else ""
-        hint = OPTIONAL_INSTALL_HINTS.get(name)
-        if hint:
-            hints.append(f"{action}:{name}{detail}: {hint}")
+    def _binary_hints(bins: dict, paths: dict) -> None:
+        for name, ok in (bins or {}).items():
+            if ok:
+                continue
+            path = (paths or {}).get(name)
+            action = "repair" if path else "install"
+            detail = f" ({path})" if path else ""
+            hint = OPTIONAL_INSTALL_HINTS.get(name)
+            if hint:
+                hints.append(f"{action}:{name}{detail}: {hint}")
+
+    _binary_hints(status.get("binaries", {}), status.get("binary_paths") or {})
+    _binary_hints(status.get("ocr_binaries") or {}, status.get("ocr_binary_paths") or {})
     optional = status.get("optional_python_deps") or {}
     binaries = status.get("binaries") or {}
     if not binaries.get("pdftoppm") and not optional.get("fitz"):

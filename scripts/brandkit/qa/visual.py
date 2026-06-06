@@ -226,11 +226,6 @@ def render_to_pngs(
         _append_render_error(render_errors, f"render failed: {exc}")
         return []
 
-    pngs = sorted(out_dir.glob("page-*.png"), key=_page_sort_key)
-    if not pngs:
-        _append_render_error(render_errors, "pdftoppm produced no PNG")
-    return pngs
-
 
 def _rasterize_pdf_to_pngs(
     pdf: Path,
@@ -289,6 +284,7 @@ def _rasterize_pdf_with_pymupdf(pdf: Path, out_dir: Path, *, dpi: int) -> tuple[
         import fitz  # type: ignore[import-not-found]
     except Exception as exc:
         return [], f"fitz import failed: {exc}"
+    doc = None
     try:
         doc = fitz.open(str(pdf))
         zoom = dpi / 72.0
@@ -296,10 +292,11 @@ def _rasterize_pdf_with_pymupdf(pdf: Path, out_dir: Path, *, dpi: int) -> tuple[
         for index, page in enumerate(doc, start=1):
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             pix.save(str(out_dir / f"page-{index}.png"))
-        if hasattr(doc, "close"):
-            doc.close()
     except Exception as exc:
         return [], str(exc)
+    finally:
+        if doc is not None and hasattr(doc, "close"):
+            doc.close()
     pngs = sorted(out_dir.glob("page-*.png"), key=_page_sort_key)
     if not pngs:
         return [], "produced no PNG"
