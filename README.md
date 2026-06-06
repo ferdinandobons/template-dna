@@ -120,7 +120,7 @@ proven, which were degraded, and what to repair next.
 
 | Layer | What it proves | What happens on failure |
 |---|---|---|
-| **Preflight** | `doctor` checks required Python packages and optional renderers (`soffice`, `pdftoppm`) before work starts. | Missing required packages must be installed/repaired. Missing visual renderers downgrade only the visual proof. |
+| **Preflight** | `doctor` checks required Python packages and optional renderers (`soffice`, `pdftoppm`, PyMuPDF/`fitz`) before work starts. | Missing required packages must be installed/repaired. Missing visual renderers downgrade only the visual proof. |
 | **L0 deterministic QA** | Schema validity, resolver targets, allowed styles/layouts/ranges, residual demo text, markdown leaks, structural diffs, formula preservation. | The gate fails or emits explicit findings before the output is treated as clean. |
 | **L1 visual proxies** | Rendered-page signals such as blank pages, zero pages, and content near page/slide edges. | Findings are warnings because the engine can detect symptoms, not intent. |
 | **L2 visual judgement** | The orchestrator opens the PNGs from `visual_manifest.json`, judges checklist items, and decides whether the result is visually acceptable. | Apply a targeted repair, regenerate, and rerun `--qa deep` until clean or honestly blocked. |
@@ -136,7 +136,7 @@ The most valuable next reliability improvements are:
 
 1. **Strict visual mode** - add a future `--qa strict` that fails when full render proof is unavailable or when L1/L2 checks are not clean.
 2. **Native PPTX object authoring** - continue beyond native tables into real PowerPoint charts/images/SmartArt instead of down-rendering them to text, while keeping component-survival warnings.
-3. **Richer visual analysis** - add `PyMuPDF` as a PDF raster fallback/cross-check, then optional `numpy`/`opencv-python` or `scikit-image` for overlap, clipping, and large-empty-region detection.
+3. **Richer visual analysis** - build on the PyMuPDF fallback with optional `numpy`/`opencv-python` or `scikit-image` for overlap, clipping, and large-empty-region detection.
 4. **Optional OCR** - detect visible stale placeholders, stale TOC caches, or demo text that OOXML text scans miss.
 5. **Skill eval set** - maintain template-based regression prompts for DOCX/PPTX/XLSX and compare outputs with and without the skill, measuring residual demo text, formula survival, component survival, page count, and visual warnings.
 
@@ -190,16 +190,21 @@ Needed only for the **visual** verification pass; their absence degrades gracefu
 
 - **LibreOffice** (`soffice`) - headless render to PDF
 - **Poppler** (`pdftoppm`) - PDF → PNG
+- **PyMuPDF** (`fitz`) - optional PDF → PNG fallback when Poppler is unavailable
 
 ```bash
 # macOS (Homebrew)
 brew install --cask libreoffice && brew install poppler
+python -m pip install PyMuPDF   # optional fallback
 # Debian / Ubuntu
 sudo apt-get install -y libreoffice poppler-utils
+python -m pip install PyMuPDF   # optional fallback
 # Fedora
 sudo dnf install -y libreoffice poppler-utils
+python -m pip install PyMuPDF   # optional fallback
 # Windows: winget install TheDocumentFoundation.LibreOffice
 #          + Poppler via conda-forge or a prebuilt binary on PATH
+#          + optional: python -m pip install PyMuPDF
 ```
 
 Check what's available at any time:
@@ -289,7 +294,8 @@ PowerPoint uses the same `IntermediateDocument`; Excel uses a `GridDocument` (na
 | `brand-xlsx` - named-region fills, formula-preserving | 🚧 early |
 | Visual QA (LibreOffice render + manifest-driven repair loop) | 🚧 implemented with graceful degraded mode |
 | Native PPTX charts / SmartArt / richer component regeneration | 🔭 catalogued, regeneration staged |
-| Strict visual mode, OCR, PyMuPDF / richer image analysis | 🔭 planned |
+| PyMuPDF PDF raster fallback | ✅ working |
+| Strict visual mode, OCR, richer image analysis | 🔭 planned |
 
 Visual Word overflow needs LibreOffice, since Word lays out at render time.
 

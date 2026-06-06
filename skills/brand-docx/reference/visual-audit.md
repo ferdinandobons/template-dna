@@ -20,7 +20,7 @@ The bytes of the generated document never change because of the audit.
 
 ## When it runs (`--qa`)
 
-| `--qa` | renderers present (`soffice` + `pdftoppm`) | renderers absent (e.g. CI) |
+| `--qa` | renderers present (`soffice` + `pdftoppm`, or optional PyMuPDF/`fitz` fallback) | renderers absent (e.g. CI) |
 |---|---|---|
 | `fast` | L0 only | L0 only (identical) |
 | `auto` | L0 + L1 | L0 + one INFO `visual.unavailable` |
@@ -36,6 +36,9 @@ Notes:
   smoke-tests the DOCX, PPTX, and XLSX render paths end to end; run
   `python scripts/brandkit/cli.py doctor` before starting the workflow and report
   missing/unusable dependencies before claiming a full visual audit.
+- `pdftoppm` remains the baseline PDF rasterizer. If it is missing or fails after
+  LibreOffice produced a PDF, optional PyMuPDF (`fitz`) can rasterize the PDF as
+  a degraded fallback; the manifest records this in `environment.optional_python`.
 
 ## L1 proxies
 
@@ -83,6 +86,9 @@ Top-level fields:
     "renderers": {
       "soffice": {"available": true, "path": "/path/to/soffice"},
       "pdftoppm": {"available": true, "path": "/path/to/pdftoppm"}
+    },
+    "optional_python": {
+      "fitz": {"available": false, "purpose": "PyMuPDF PDF raster fallback"}
     },
     "install_hints": []
   },

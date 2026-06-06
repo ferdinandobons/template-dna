@@ -9,8 +9,12 @@ from pathlib import Path
 
 
 REQUIRED = ("docx", "pptx", "openpyxl", "lxml", "PIL")
+OPTIONAL_PYTHON = {"fitz": "PyMuPDF PDF raster fallback"}
 OPTIONAL_BINARIES = {"soffice": "visual DOCX/PPTX/XLSX render", "pdftoppm": "PDF to PNG visual proof"}
 PYTHON_INSTALL_HINT = "python -m pip install -r requirements.txt"
+OPTIONAL_PYTHON_INSTALL_HINTS = {
+    "fitz": "python -m pip install PyMuPDF  # optional PDF raster fallback",
+}
 OPTIONAL_INSTALL_HINTS = {
     "soffice": (
         "macOS: brew install --cask libreoffice-still; "
@@ -35,6 +39,10 @@ VISUAL_PIPELINE_TIMEOUT_S = 45
 
 def probe() -> dict:
     deps = {name: importlib.util.find_spec(name) is not None for name in REQUIRED}
+    optional_deps = {
+        name: importlib.util.find_spec(name) is not None
+        for name in OPTIONAL_PYTHON
+    }
     bins: dict[str, bool] = {}
     paths: dict[str, str | None] = {}
     errors: dict[str, str] = {}
@@ -44,14 +52,20 @@ def probe() -> dict:
         paths[name] = path
         if error:
             errors[name] = error
-    visual_ok = all(bins.values())
+    visual_ok = bool(bins.get("soffice")) and (
+        bool(bins.get("pdftoppm")) or bool(optional_deps.get("fitz"))
+    )
     visual_error = None
     if visual_ok:
-        visual_ok, visual_error = _probe_visual_pipeline(paths)
+        visual_ok, visual_error = _probe_visual_pipeline(
+            paths,
+            {"pdftoppm": bool(bins.get("pdftoppm")), "fitz": bool(optional_deps.get("fitz"))},
+        )
         if visual_error:
             errors["visual_qa"] = visual_error
     return {
         "python_deps": deps,
+        "optional_python_deps": optional_deps,
         "binaries": bins,
         "binary_paths": paths,
         "binary_errors": errors,
@@ -138,7 +152,10 @@ def _short_output(data) -> str:
     return " ".join(text.strip().split())[:240]
 
 
-def _probe_visual_pipeline(paths: dict[str, str | None]) -> tuple[bool, str | None]:
+def _probe_visual_pipeline(
+    paths: dict[str, str | None],
+    rasterizers: dict[str, bool] | None = None,
+) -> tuple[bool, str | None]:
     """Smoke-test the actual DOCX/PPTX/XLSX -> PDF -> PNG render pipeline.
 
     Version probes catch missing executables, but they do not prove LibreOffice can
@@ -146,6 +163,10 @@ def _probe_visual_pipeline(paths: dict[str, str | None]) -> tuple[bool, str | No
     all three OOXML formats, so the doctor probe must prove the full render chain
     for each one instead of treating DOCX success as a proxy for PPTX/XLSX.
     """
+    rasterizers = rasterizers or {
+        "pdftoppm": bool(paths.get("pdftoppm")),
+        "fitz": importlib.util.find_spec("fitz") is not None,
+    }
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         documents, error = _create_visual_probe_documents(tmp)
@@ -160,6 +181,7 @@ def _probe_visual_pipeline(paths: dict[str, str | None]) -> tuple[bool, str | No
                 pdf_dir=tmp / f"pdf-{suffix}",
                 png_dir=tmp / f"png-{suffix}",
                 lo_profile=tmp / f"lo-profile-{suffix}",
+                rasterizers=rasterizers,
             )
             if not ok:
                 return False, f"{suffix} {error}"
@@ -212,6 +234,7 @@ def _probe_visual_document(
     pdf_dir: Path,
     png_dir: Path,
     lo_profile: Path,
+    rasterizers: dict[str, bool] | None = None,
 ) -> tuple[bool, str | None]:
     pdf_dir.mkdir()
     png_dir.mkdir()
@@ -237,7 +260,24 @@ def _probe_visual_document(
     if not pdfs:
         return False, "soffice convert produced no PDF"
 
+    rasterizers = rasterizers or {"pdftoppm": bool(paths.get("pdftoppm")), "fitz": False}
     pdftoppm_path = paths.get("pdftoppm") or "pdftoppm"
+    pdftoppm_error = None
+    if rasterizers.get("pdftoppm"):
+        ok, pdftoppm_error = _rasterize_pdf_with_pdftoppm(pdftoppm_path, pdfs[0], png_dir)
+        if ok:
+            return True, None
+    if rasterizers.get("fitz"):
+        ok, pymupdf_error = _rasterize_pdf_with_pymupdf(pdfs[0], png_dir, dpi=50)
+        if ok:
+            return True, None
+        if pdftoppm_error:
+            return False, f"pdftoppm failed: {pdftoppm_error}; PyMuPDF failed: {pymupdf_error}"
+        return False, f"PyMuPDF failed: {pymupdf_error}"
+    return False, pdftoppm_error or "no PDF rasterizer available"
+
+
+def _rasterize_pdf_with_pdftoppm(pdftoppm_path: str, pdf: Path, png_dir: Path) -> tuple[bool, str | None]:
     try:
         toppm = subprocess.run(
             [
@@ -245,7 +285,7 @@ def _probe_visual_document(
                 "-png",
                 "-r",
                 "50",
-                str(pdfs[0]),
+                str(pdf),
                 str(png_dir / "page"),
             ],
             capture_output=True,
@@ -253,15 +293,36 @@ def _probe_visual_document(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"pdftoppm failed: {exc}"
+        return False, str(exc)
     if toppm.returncode != 0:
-        return False, "pdftoppm failed: " + (
+        return False, (
             _short_output(toppm.stderr)
             or _short_output(toppm.stdout)
             or f"exit code {toppm.returncode}"
         )
     if not list(png_dir.glob("page-*.png")):
-        return False, "pdftoppm produced no PNG"
+        return False, "produced no PNG"
+    return True, None
+
+
+def _rasterize_pdf_with_pymupdf(pdf: Path, png_dir: Path, *, dpi: int) -> tuple[bool, str | None]:
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except Exception as exc:
+        return False, f"fitz import failed: {exc}"
+    try:
+        doc = fitz.open(str(pdf))
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        for index, page in enumerate(doc, start=1):
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            pix.save(str(png_dir / f"page-{index}.png"))
+        if hasattr(doc, "close"):
+            doc.close()
+    except Exception as exc:
+        return False, str(exc)
+    if not list(png_dir.glob("page-*.png")):
+        return False, "produced no PNG"
     return True, None
 
 
@@ -293,6 +354,8 @@ def print_report() -> None:
     status = probe()
     for name, ok in status["python_deps"].items():
         print(f"python:{name}: {'ok' if ok else 'missing'}")
+    for name, ok in status.get("optional_python_deps", {}).items():
+        print(f"python:{name}: {'ok' if ok else 'missing'} ({OPTIONAL_PYTHON[name]})")
     for name, ok in status["binaries"].items():
         if ok:
             label = "ok"
@@ -334,4 +397,10 @@ def install_hints(status: dict) -> list[str]:
         hint = OPTIONAL_INSTALL_HINTS.get(name)
         if hint:
             hints.append(f"{action}:{name}{detail}: {hint}")
+    optional = status.get("optional_python_deps") or {}
+    binaries = status.get("binaries") or {}
+    if not binaries.get("pdftoppm") and not optional.get("fitz"):
+        hint = OPTIONAL_PYTHON_INSTALL_HINTS.get("fitz")
+        if hint:
+            hints.append(f"install:fitz: {hint}")
     return hints

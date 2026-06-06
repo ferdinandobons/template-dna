@@ -174,6 +174,7 @@ class RendererAvailabilityTest(unittest.TestCase):
         try:
             doctor.probe = lambda: {
                 "python_deps": {"docx": False, "pptx": True, "openpyxl": True, "lxml": True, "PIL": True},
+                "optional_python_deps": {"fitz": False},
                 "binaries": {"soffice": False, "pdftoppm": False},
                 "binary_paths": {"soffice": None, "pdftoppm": None},
                 "binary_errors": {},
@@ -192,6 +193,8 @@ class RendererAvailabilityTest(unittest.TestCase):
         self.assertIn("libreoffice", out)
         self.assertIn("install:pdftoppm:", out)
         self.assertIn("poppler", out)
+        self.assertIn("install:fitz:", out)
+        self.assertIn("PyMuPDF", out)
 
     def test_probe_marks_visual_unavailable_when_binary_probe_fails(self) -> None:
         """PATH presence alone is not enough; broken renderers must degrade."""
@@ -331,6 +334,44 @@ class RendererAvailabilityTest(unittest.TestCase):
         self.assertEqual({".docx", ".pptx", ".xlsx"}, set(converted_suffixes))
         self.assertEqual(3, len(rasterized_pdfs))
 
+    def test_conversion_probe_uses_pymupdf_when_pdftoppm_missing(self) -> None:
+        orig_run = subprocess.run
+        orig_pymupdf = doctor._rasterize_pdf_with_pymupdf
+        converted: list[str] = []
+        pymupdf_renders: list[str] = []
+
+        def fake_run(args, *unused_args, **unused_kwargs):
+            if "--convert-to" in args:
+                document = Path(args[-1])
+                converted.append(document.suffix)
+                outdir = Path(args[args.index("--outdir") + 1])
+                outdir.mkdir(parents=True, exist_ok=True)
+                (outdir / f"{document.stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            if args and Path(args[0]).name == "pdftoppm":
+                raise AssertionError("pdftoppm must not be used when rasterizer is disabled")
+            return SimpleNamespace(returncode=0, stdout=b"version ok", stderr=b"")
+
+        def fake_pymupdf(pdf: Path, png_dir: Path, *, dpi: int):
+            pymupdf_renders.append(pdf.stem)
+            _centered_content(width=100, height=100).save(png_dir / "page-1.png")
+            return True, None
+
+        subprocess.run = fake_run
+        doctor._rasterize_pdf_with_pymupdf = fake_pymupdf
+        try:
+            ok, error = doctor._probe_visual_pipeline(
+                {"soffice": "/fake/soffice", "pdftoppm": None},
+                {"pdftoppm": False, "fitz": True},
+            )
+        finally:
+            subprocess.run = orig_run
+            doctor._rasterize_pdf_with_pymupdf = orig_pymupdf
+
+        self.assertTrue(ok, error)
+        self.assertEqual({".docx", ".pptx", ".xlsx"}, set(converted))
+        self.assertEqual(3, len(pymupdf_renders))
+
 
 # ---------------------------------------------------------------------------
 # §7.2 Manifest + checklist (model-free)
@@ -383,6 +424,7 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(data["environment"]["visual_qa"], True)
             self.assertEqual(data["environment"]["renderers"]["soffice"]["path"], "/usr/bin/soffice")
             self.assertEqual(data["environment"]["renderers"]["pdftoppm"]["available"], True)
+            self.assertIn("fitz", data["environment"]["optional_python"])
             self.assertIn("platform", data["environment"])
 
     def test_checklist_derives_from_profile(self) -> None:
@@ -436,6 +478,40 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(data["pages"], [])
             self.assertEqual(data["l1_findings"], [])
             self.assertTrue(data["checklist"])  # still populated
+
+    def test_rasterize_pdf_uses_pymupdf_fallback_when_pdftoppm_missing(self) -> None:
+        orig_which = vqa.shutil.which
+        orig_pymupdf = vqa._rasterize_pdf_with_pymupdf
+        try:
+            vqa.shutil.which = lambda name: None if name == "pdftoppm" else orig_which(name)
+
+            def fake_pymupdf(pdf: Path, out_dir: Path, *, dpi: int):
+                png = out_dir / "page-1.png"
+                _centered_content(width=100, height=100).save(png)
+                return [png], None
+
+            vqa._rasterize_pdf_with_pymupdf = fake_pymupdf
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                pdf = td / "out.pdf"
+                pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+                errors: list[str] = []
+                warnings: list[str] = []
+                pngs = vqa._rasterize_pdf_to_pngs(
+                    pdf,
+                    td,
+                    dpi=100,
+                    timeout_s=1,
+                    render_errors=errors,
+                    render_warnings=warnings,
+                )
+        finally:
+            vqa.shutil.which = orig_which
+            vqa._rasterize_pdf_with_pymupdf = orig_pymupdf
+
+        self.assertEqual([p.name for p in pngs], ["page-1.png"])
+        self.assertTrue(any("pdftoppm unavailable" in e for e in errors))
+        self.assertTrue(any("PyMuPDF PDF raster fallback used" in w for w in warnings))
 
 
 # ---------------------------------------------------------------------------

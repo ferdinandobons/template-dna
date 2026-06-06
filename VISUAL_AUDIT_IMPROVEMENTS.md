@@ -43,6 +43,8 @@ Expected behavior:
   hints when available.
 - The visual preflight now smoke-tests the full render chain for DOCX, PPTX, and
   XLSX instead of treating DOCX success as proof for every Office format.
+- PyMuPDF (`fitz`) is now detected as an optional PDF raster fallback when
+  `pdftoppm` is unavailable or fails after LibreOffice has produced a PDF.
 - Gated real-render E2E tests now cover `--qa deep` manifest/PNG generation for
   DOCX, PPTX, and XLSX when `BRANDDOCS_RUN_REAL_RENDER=1` is enabled.
 - DOCX generation now rewrites the visible cache of outline TOC fields from the
@@ -93,6 +95,9 @@ preservation preference.
 ### 2. Add a second PDF rasterizer
 
 Add `PyMuPDF` as a fallback or cross-check after PDF generation.
+
+Status: fallback is implemented; renderer-disagreement cross-checking remains a
+future enhancement.
 
 Why:
 
@@ -195,6 +200,6 @@ HTML exports or dashboards, not as the main Office audit engine.
 3. Add composition intelligence for inherited structures such as section breaks.
 4. Add richer manifest diagnostics for degraded visual audits.
 5. Deepen stale TOC/cache rendering beyond outline DOCX fields.
-6. Add `PyMuPDF` fallback/cross-check.
+6. Add renderer disagreement checks on top of the PyMuPDF fallback.
 7. Add richer image analysis with `numpy` and `opencv-python` or `scikit-image`.
 8. Add optional OCR for residual visible text.

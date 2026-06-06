@@ -57,7 +57,8 @@ Use its output to decide the run mode:
 
 - If a required Python dependency is missing, install/repair it before extraction
   or generation; the core engine is not ready.
-- If only visual renderers are missing or unusable (`soffice` / `pdftoppm`), the
+- If only visual renderers are missing or unusable (`soffice` plus `pdftoppm` or
+  optional PyMuPDF/`fitz`), the
   core L0 workflow can still run, but a full visual audit cannot be claimed.
   Tell the user what is missing, include the install/repair hint printed by
   `doctor`, and either proceed with degraded QA or install the renderer first.
@@ -116,7 +117,7 @@ python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
 `--qa` selects the QA depth (see [reference/visual-audit.md](reference/visual-audit.md)):
 
 - `fast` — deterministic **L0** only.
-- `auto` — L0 **+ L1** visual pixel proxies when renderers (`soffice` + `pdftoppm`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
+- `auto` — L0 **+ L1** visual pixel proxies when renderers (`soffice` plus `pdftoppm` or optional PyMuPDF/`fitz`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
 - `deep` — L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; the orchestrator must then run the **L2** step (see below).
 
 Verify has no output to render, so all three modes behave as L0 at verify time; the visual stages run at **generate** time.
@@ -174,6 +175,7 @@ The two-stage visual audit closes the "L0-only" gap: L1 deterministic pixel
 proxies catch rendered-layout defects L0 cannot see (blank/broken slides, content
 bleeding past the slide edges), and the L2 manifest drives the orchestrator's
 qualitative judgement and repair loop. See
-[reference/visual-audit.md](reference/visual-audit.md). When `soffice`/`pdftoppm`
-are absent (e.g. CI), the audit degrades cleanly to L0 plus a single INFO
+[reference/visual-audit.md](reference/visual-audit.md). When `soffice` and both
+PDF rasterizers (`pdftoppm`, optional PyMuPDF/`fitz`) are absent (e.g. CI), the
+audit degrades cleanly to L0 plus a single INFO
 `visual.unavailable`; exit codes are unchanged.

@@ -7,8 +7,9 @@ model: the qualitative L2 judgement is the orchestrator's job (driven by
 ``SKILL.md``). The engine only:
 
   * **renders** an output (``.docx``/``.pptx``/``.xlsx``) to per-page PNGs using
-    the env-detected external tools (``soffice`` + ``pdftoppm``) -- env-aware and
-    degrading cleanly to ``[]`` when they are absent;
+    the env-detected tools (``soffice`` + ``pdftoppm`` by default, with optional
+    PyMuPDF/``fitz`` PDF raster fallback) -- env-aware and degrading cleanly to
+    ``[]`` when they are absent;
   * runs **L1 deterministic pixel proxies** that catch defects L0 cannot see
     because they depend on the *rendered* layout (blank pages, content bleeding
     past the printable margins, zero rendered pages). Each defect becomes one
@@ -118,9 +119,11 @@ def render_to_pngs(
 ) -> list[Path]:
     """Render a ``.docx``/``.pptx``/``.xlsx`` to an ordered list of per-page PNGs.
 
-    Pipeline: ``soffice --headless --convert-to pdf --outdir <tmp> <document>``
-    then ``pdftoppm -png -r <dpi> <pdf> <out_dir>/page``. Returns the PNG paths
-    ordered numerically (``page-1.png``, ``page-2.png``, ..., ``page-10.png``).
+    Pipeline: ``soffice --headless --convert-to pdf --outdir <tmp> <document>``,
+    then ``pdftoppm -png -r <dpi> <pdf> <out_dir>/page``. If ``pdftoppm`` is
+    missing or fails, optional PyMuPDF (``fitz``) is used as a PDF raster fallback
+    when installed. Returns the PNG paths ordered numerically (``page-1.png``,
+    ``page-2.png``, ..., ``page-10.png``).
 
     Clean degrade: returns ``[]`` if :func:`renderers_available` is False, if
     ``soffice``/``pdftoppm`` fail (non-zero rc), time out, or produce no
@@ -194,22 +197,21 @@ def render_to_pngs(
                     reason="after soffice produced no PDF",
                 )
             pdf = pdfs[0]
-            toppm = subprocess.run(
-                ["pdftoppm", "-png", "-r", str(dpi), str(pdf), str(out_dir / "page")],
-                capture_output=True, timeout=timeout_s, check=False,
+            pngs = _rasterize_pdf_to_pngs(
+                pdf,
+                out_dir,
+                dpi=dpi,
+                timeout_s=timeout_s,
+                render_errors=render_errors,
+                render_warnings=render_warnings,
             )
-            if toppm.returncode != 0:
-                _append_render_error(
-                    render_errors,
-                    "pdftoppm failed: "
-                    + (_short_output(toppm.stderr)
-                       or _short_output(toppm.stdout)
-                       or f"exit code {toppm.returncode}"),
-                )
+            if pngs:
+                return pngs
+            else:
                 return _render_quicklook_thumbnail(
                     document, out_dir, timeout_s=timeout_s,
                     render_errors=render_errors, render_warnings=render_warnings,
-                    reason="after pdftoppm failure",
+                    reason="after PDF rasterization failure",
                 )
     except subprocess.TimeoutExpired as exc:
         _append_render_error(render_errors, f"render timed out: {exc}")
@@ -222,6 +224,80 @@ def render_to_pngs(
     if not pngs:
         _append_render_error(render_errors, "pdftoppm produced no PNG")
     return pngs
+
+
+def _rasterize_pdf_to_pngs(
+    pdf: Path,
+    out_dir: Path,
+    *,
+    dpi: int,
+    timeout_s: int,
+    render_errors: list[str] | None,
+    render_warnings: list[str] | None,
+) -> list[Path]:
+    """Rasterize an existing PDF via pdftoppm, then optional PyMuPDF fallback."""
+    pdftoppm = shutil.which("pdftoppm")
+    if pdftoppm:
+        try:
+            toppm = subprocess.run(
+                [pdftoppm, "-png", "-r", str(dpi), str(pdf), str(out_dir / "page")],
+                capture_output=True,
+                timeout=timeout_s,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _append_render_error(render_errors, f"pdftoppm timed out: {exc}")
+        except OSError as exc:
+            _append_render_error(render_errors, f"pdftoppm failed: {exc}")
+        else:
+            if toppm.returncode == 0:
+                pngs = sorted(out_dir.glob("page-*.png"), key=_page_sort_key)
+                if pngs:
+                    return pngs
+                _append_render_error(render_errors, "pdftoppm produced no PNG")
+            else:
+                _append_render_error(
+                    render_errors,
+                    "pdftoppm failed: "
+                    + (_short_output(toppm.stderr)
+                       or _short_output(toppm.stdout)
+                       or f"exit code {toppm.returncode}"),
+                )
+    else:
+        _append_render_error(render_errors, "pdftoppm unavailable")
+
+    pngs, error = _rasterize_pdf_with_pymupdf(pdf, out_dir, dpi=dpi)
+    if pngs:
+        _append_render_warning(
+            render_warnings,
+            "PyMuPDF PDF raster fallback used; audit is degraded relative to pdftoppm baseline",
+        )
+        return pngs
+    if error:
+        _append_render_error(render_errors, f"PyMuPDF fallback failed: {error}")
+    return []
+
+
+def _rasterize_pdf_with_pymupdf(pdf: Path, out_dir: Path, *, dpi: int) -> tuple[list[Path], str | None]:
+    try:
+        import fitz  # type: ignore[import-not-found]
+    except Exception as exc:
+        return [], f"fitz import failed: {exc}"
+    try:
+        doc = fitz.open(str(pdf))
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        for index, page in enumerate(doc, start=1):
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            pix.save(str(out_dir / f"page-{index}.png"))
+        if hasattr(doc, "close"):
+            doc.close()
+    except Exception as exc:
+        return [], str(exc)
+    pngs = sorted(out_dir.glob("page-*.png"), key=_page_sort_key)
+    if not pngs:
+        return [], "produced no PNG"
+    return pngs, None
 
 
 def _render_quicklook_thumbnail(
@@ -722,6 +798,7 @@ def visual_environment_summary(
     binary_paths = status.get("binary_paths") or {}
     binaries = status.get("binaries") or {}
     binary_errors = status.get("binary_errors") or {}
+    optional_python = status.get("optional_python_deps") or {}
     renderers = {}
     for name in doctor.OPTIONAL_BINARIES:
         path = binary_paths.get(name) or shutil.which(name)
@@ -739,6 +816,13 @@ def visual_environment_summary(
         "visual_qa": bool(status.get("visual_qa", renderers_ok)),
         "degraded": bool(degraded),
         "renderers": renderers,
+        "optional_python": {
+            name: {
+                "available": bool(optional_python.get(name)),
+                "purpose": purpose,
+            }
+            for name, purpose in doctor.OPTIONAL_PYTHON.items()
+        },
         "install_hints": hints,
     }
 
