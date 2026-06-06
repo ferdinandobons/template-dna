@@ -63,10 +63,13 @@ flowchart TD
     QA --> L0["L0 deterministic checks"]
     QA --> MODE{"QA mode"}
     MODE -->|fast| OUT["return file + QA summary"]
-    MODE -->|auto/deep + renderers available| L1["render via soffice + pdftoppm -> PNGs"]
+    MODE -->|auto/deep + renderers available| L1["render via soffice + pdftoppm/PyMuPDF -> PNGs"]
     MODE -->|renderers unavailable| DEG["degraded manifest + visual.unavailable"]
 
-    L1 --> MAN["visual_manifest.json"]
+    L1 --> OCR{"deep + tesseract available?"}
+    OCR -->|Yes| OCRRUN["OCR rendered PNGs"]
+    OCR -->|No| MAN["visual_manifest.json"]
+    OCRRUN --> MAN
     DEG --> MAN
     MAN --> L2["orchestrator visual judgement"]
     L2 --> FIX{"Defects found?"}
@@ -121,7 +124,7 @@ generated/<job>/
 |  |- input.idoc.json            # or input.grid.json for xlsx
 |  |- output.docx|pptx|xlsx
 |  |- qa_findings.json
-|  |- visual_manifest.json
+|  |- visual_manifest.json       # pages, L1, environment, optional OCR report
 |  `- repair_decision.json
 |- attempt-2/
 |  `- ...
@@ -152,7 +155,7 @@ generated/<job>/
 |---|---|---|
 | Missing dependency | `doctor` missing required Python package | install/repair before running core engine |
 | Visual render unavailable | `visual.unavailable`, degraded manifest | proceed only with L0, or install renderers before claiming visual proof |
-| Residual demo text | `no_residual_template_text`, OCR/render text | remove or replace captured demo region, then regenerate |
+| Residual demo text | `no_residual_template_text`, `visual.ocr_residual_text`, OCR/render text | remove or replace captured demo region, then regenerate |
 | Stale derived index | stale TOC/agenda/list entries | regenerate field cache/index from current headings |
 | Blank pages/slides | `visual.blank_page`, large empty render | collapse/move/remove inherited scaffold or section break |
 | Edge bleed/clipping | `visual.edge_bleed`, visual inspection | split content, reduce block density, adjust composition |
@@ -179,7 +182,8 @@ A generated artifact is ready to return when:
 - L0 deterministic QA has no errors.
 - Any warnings are either resolved or explained as accepted limitations.
 - If visual renderers are available, `--qa deep` has a manifest with pages and
-  L2 checklist items judged clean.
+  L2 checklist items judged clean. If OCR is available, `ocr.hits` is empty or
+  each hit is explained and intentionally accepted.
 - If visual renderers are unavailable, the final response clearly says visual
   proof is degraded and lists the `doctor` repair hint.
 - The final file path and QA summary are returned to the user.

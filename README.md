@@ -120,9 +120,9 @@ proven, which were degraded, and what to repair next.
 
 | Layer | What it proves | What happens on failure |
 |---|---|---|
-| **Preflight** | `doctor` checks required Python packages and optional renderers (`soffice`, `pdftoppm`, PyMuPDF/`fitz`) before work starts. | Missing required packages must be installed/repaired. Missing visual renderers downgrade only the visual proof. |
+| **Preflight** | `doctor` checks required Python packages, optional renderers (`soffice`, `pdftoppm`, PyMuPDF/`fitz`), and optional OCR (`tesseract`) before work starts. | Missing required packages must be installed/repaired. Missing visual/OCR tools downgrade only that proof layer. |
 | **L0 deterministic QA** | Schema validity, resolver targets, allowed styles/layouts/ranges, residual demo text, markdown leaks, structural diffs, formula preservation. | The gate fails or emits explicit findings before the output is treated as clean. |
-| **L1 visual proxies** | Rendered-page signals such as blank pages, zero pages, and content near page/slide edges. | Findings are warnings because the engine can detect symptoms, not intent. |
+| **L1 visual proxies** | Rendered-page signals such as blank pages, zero pages, content near page/slide edges, and optional OCR hits for visible residual template text. | Findings are warnings because the engine can detect symptoms, not intent. |
 | **L2 visual judgement** | The orchestrator opens the PNGs from `visual_manifest.json`, judges checklist items, and decides whether the result is visually acceptable. | Apply a targeted repair, regenerate, and rerun `--qa deep` until clean or honestly blocked. |
 
 The template is treated as a source of reusable brand affordances, not a script
@@ -137,8 +137,7 @@ The most valuable next reliability improvements are:
 1. **Strict visual mode** - add a future `--qa strict` that fails when full render proof is unavailable or when L1/L2 checks are not clean.
 2. **Native PPTX object authoring** - continue beyond native tables into real PowerPoint charts/images/SmartArt instead of down-rendering them to text, while keeping component-survival warnings.
 3. **Richer visual analysis** - build on the PyMuPDF fallback with optional `numpy`/`opencv-python` or `scikit-image` for overlap, clipping, and large-empty-region detection.
-4. **Optional OCR** - detect visible stale placeholders, stale TOC caches, or demo text that OOXML text scans miss.
-5. **Skill eval set** - maintain template-based regression prompts for DOCX/PPTX/XLSX and compare outputs with and without the skill, measuring residual demo text, formula survival, component survival, page count, and visual warnings.
+4. **Skill eval set** - maintain template-based regression prompts for DOCX/PPTX/XLSX and compare outputs with and without the skill, measuring residual demo text, formula survival, component survival, page count, and visual warnings.
 
 ---
 
@@ -191,19 +190,21 @@ Needed only for the **visual** verification pass; their absence degrades gracefu
 - **LibreOffice** (`soffice`) - headless render to PDF
 - **Poppler** (`pdftoppm`) - PDF → PNG
 - **PyMuPDF** (`fitz`) - optional PDF → PNG fallback when Poppler is unavailable
+- **Tesseract** (`tesseract`) - optional OCR for rendered residual placeholder/demo text
 
 ```bash
 # macOS (Homebrew)
-brew install --cask libreoffice && brew install poppler
+brew install --cask libreoffice && brew install poppler tesseract
 python -m pip install PyMuPDF   # optional fallback
 # Debian / Ubuntu
-sudo apt-get install -y libreoffice poppler-utils
+sudo apt-get install -y libreoffice poppler-utils tesseract-ocr
 python -m pip install PyMuPDF   # optional fallback
 # Fedora
-sudo dnf install -y libreoffice poppler-utils
+sudo dnf install -y libreoffice poppler-utils tesseract
 python -m pip install PyMuPDF   # optional fallback
 # Windows: winget install TheDocumentFoundation.LibreOffice
 #          + Poppler via conda-forge or a prebuilt binary on PATH
+#          + optional: winget install UB-Mannheim.TesseractOCR
 #          + optional: python -m pip install PyMuPDF
 ```
 
@@ -295,7 +296,8 @@ PowerPoint uses the same `IntermediateDocument`; Excel uses a `GridDocument` (na
 | Visual QA (LibreOffice render + manifest-driven repair loop) | 🚧 implemented with graceful degraded mode |
 | Native PPTX charts / SmartArt / richer component regeneration | 🔭 catalogued, regeneration staged |
 | PyMuPDF PDF raster fallback | ✅ working |
-| Strict visual mode, OCR, richer image analysis | 🔭 planned |
+| Optional OCR rendered-text residual scan | ✅ working when Tesseract is installed |
+| Strict visual mode, richer image analysis | 🔭 planned |
 
 Visual Word overflow needs LibreOffice, since Word lays out at render time.
 

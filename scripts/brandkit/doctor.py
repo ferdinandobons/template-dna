@@ -11,6 +11,7 @@ from pathlib import Path
 REQUIRED = ("docx", "pptx", "openpyxl", "lxml", "PIL")
 OPTIONAL_PYTHON = {"fitz": "PyMuPDF PDF raster fallback"}
 OPTIONAL_BINARIES = {"soffice": "visual DOCX/PPTX/XLSX render", "pdftoppm": "PDF to PNG visual proof"}
+OPTIONAL_OCR_BINARIES = {"tesseract": "optional OCR visible-text audit"}
 PYTHON_INSTALL_HINT = "python -m pip install -r requirements.txt"
 OPTIONAL_PYTHON_INSTALL_HINTS = {
     "fitz": "python -m pip install PyMuPDF  # optional PDF raster fallback",
@@ -28,10 +29,17 @@ OPTIONAL_INSTALL_HINTS = {
         "Fedora: sudo dnf install -y poppler-utils; "
         "Windows: install Poppler and add its bin directory to PATH"
     ),
+    "tesseract": (
+        "macOS: brew install tesseract; "
+        "Debian/Ubuntu: sudo apt-get install -y tesseract-ocr; "
+        "Fedora: sudo dnf install -y tesseract; "
+        "Windows: winget install UB-Mannheim.TesseractOCR"
+    ),
 }
 OPTIONAL_BINARY_PROBES = {
     "soffice": ("--headless", "--version"),
     "pdftoppm": ("-v",),
+    "tesseract": ("--version",),
 }
 BINARY_PROBE_TIMEOUT_S = 10
 VISUAL_PIPELINE_TIMEOUT_S = 45
@@ -52,6 +60,15 @@ def probe() -> dict:
         paths[name] = path
         if error:
             errors[name] = error
+    ocr_bins: dict[str, bool] = {}
+    ocr_paths: dict[str, str | None] = {}
+    ocr_errors: dict[str, str] = {}
+    for name in OPTIONAL_OCR_BINARIES:
+        ok, path, error = _probe_binary(name)
+        ocr_bins[name] = ok
+        ocr_paths[name] = path
+        if error:
+            ocr_errors[name] = error
     visual_ok = bool(bins.get("soffice")) and (
         bool(bins.get("pdftoppm")) or bool(optional_deps.get("fitz"))
     )
@@ -70,6 +87,10 @@ def probe() -> dict:
         "binary_paths": paths,
         "binary_errors": errors,
         "visual_qa": visual_ok,
+        "ocr_binaries": ocr_bins,
+        "ocr_binary_paths": ocr_paths,
+        "ocr_binary_errors": ocr_errors,
+        "ocr_qa": bool(ocr_bins.get("tesseract")),
     }
 
 
@@ -368,6 +389,18 @@ def print_report() -> None:
         if error and label == "unusable":
             msg += f" - {error}"
         print(msg)
+    for name, ok in (status.get("ocr_binaries") or {}).items():
+        if ok:
+            label = "ok"
+        elif (status.get("ocr_binary_paths") or {}).get(name):
+            label = "unusable"
+        else:
+            label = "missing"
+        msg = f"ocr:{name}: {label} ({OPTIONAL_OCR_BINARIES[name]})"
+        error = (status.get("ocr_binary_errors") or {}).get(name)
+        if error and label == "unusable":
+            msg += f" - {error}"
+        print(msg)
     if status["visual_qa"]:
         print("visual QA: L1 proxy + L2 manifest available")
     else:
@@ -375,6 +408,10 @@ def print_report() -> None:
         if status.get("binary_errors", {}).get("visual_qa"):
             suffix = f" ({status['binary_errors']['visual_qa']})"
         print(f"visual QA disabled; L0 deterministic QA remains available{suffix}")
+    if status.get("ocr_qa"):
+        print("OCR QA: optional visible-text scan available")
+    else:
+        print("OCR QA disabled; install optional OCR engine for rendered residual-text checks")
     for hint in install_hints(status):
         print(hint)
 
@@ -392,6 +429,15 @@ def install_hints(status: dict) -> list[str]:
         if ok:
             continue
         path = (status.get("binary_paths") or {}).get(name)
+        action = "repair" if path else "install"
+        detail = f" ({path})" if path else ""
+        hint = OPTIONAL_INSTALL_HINTS.get(name)
+        if hint:
+            hints.append(f"{action}:{name}{detail}: {hint}")
+    for name, ok in (status.get("ocr_binaries") or {}).items():
+        if ok:
+            continue
+        path = (status.get("ocr_binary_paths") or {}).get(name)
         action = "repair" if path else "install"
         detail = f" ({path})" if path else ""
         hint = OPTIONAL_INSTALL_HINTS.get(name)

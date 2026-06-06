@@ -62,6 +62,9 @@ Use its output to decide the run mode:
   core L0 workflow can still run, but a full visual audit cannot be claimed.
   Tell the user what is missing, include the install/repair hint printed by
   `doctor`, and either proceed with degraded QA or install the renderer first.
+- If optional OCR (`tesseract`) is missing, the visual audit can still run, but
+  rendered residual-text proof is incomplete. Report that limitation when
+  judging stale placeholders or field caches.
 - For `--qa deep`, prefer repairing/installing renderers before generation. If
   the environment cannot run them, generate a degraded manifest and state clearly
   that the L2 visual proof is incomplete.
@@ -118,7 +121,7 @@ python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
 
 - `fast` — deterministic **L0** only.
 - `auto` — L0 **+ L1** visual pixel proxies when renderers (`soffice` plus `pdftoppm` or optional PyMuPDF/`fitz`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
-- `deep` — L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; the orchestrator must then run the **L2** step (see below).
+- `deep` — L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; if `tesseract` is installed the manifest also includes OCR text/hits. The orchestrator must then run the **L2** step (see below).
 
 Verify has no output to render, so all three modes behave as L0 at verify time; the visual stages run at **generate** time.
 
@@ -142,9 +145,11 @@ the Python engine never calls a model. To run the full two-stage audit:
    the `.pptx` bytes never change).
 2. Read the manifest path from stdout (`visual manifest: <path>`).
 3. Open the PNGs listed in `pages[*].png`. For every entry in `checklist`, judge
-   PASS/FAIL against the rendered pages, taking `l1_findings` into account.
+   PASS/FAIL against the rendered pages, taking `l1_findings` and `ocr.hits` into
+   account.
 4. If any checklist item FAILS (or an L1 WARNING is confirmed visually as a real
-   defect): **repair** the IntermediateDocument/content or the generated
+   defect, or a `visual.ocr_residual_text` hit is confirmed as stale visible
+   template text): **repair** the IntermediateDocument/content or the generated
    composition, **regenerate**, then **re-run the audit**. Loop until the
    checklist is clean, or until no further targeted repair can be justified
    without user input.

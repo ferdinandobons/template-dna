@@ -228,12 +228,14 @@ def _present_comprehension(profile: dict) -> dict | None:
     return None
 
 
-def _captured_demo_texts(profile: dict) -> list[str]:
+def captured_template_texts(profile: dict, *, include_surface_prompts: bool = False) -> list[str]:
     """Collect every demo/placeholder text the extractor captured for THIS template.
 
     Model-free and language-agnostic: the comparison strings come from the
     template's own captured facts (cover ``demo_value`` s, surfaced demo-region
-    markers/text), never a fixed phrase in any language.
+    markers/text), never a fixed phrase in any language. Surface placeholder
+    prompts are opt-in because some formats keep master/layout prompts inside the
+    package even when they are not visibly rendered; L0 must not fail on those.
     """
     texts: list[str] = []
     comp = _present_comprehension(profile)
@@ -251,6 +253,19 @@ def _captured_demo_texts(profile: dict) -> list[str]:
                     texts.append(str(m))
             if demo.get("start_text"):
                 texts.append(str(demo["start_text"]))
+        if not include_surface_prompts:
+            return _dedup_texts(texts)
+        for anchor in sub.get("cover_anchors") or []:
+            if not isinstance(anchor, dict):
+                continue
+            for key in ("placeholder", "demo_value"):
+                value = anchor.get(key)
+                if value:
+                    texts.append(str(value))
+    return _dedup_texts(texts)
+
+
+def _dedup_texts(texts: list[str]) -> list[str]:
     # De-dup preserving order.
     seen: set[str] = set()
     out: list[str] = []
@@ -259,6 +274,10 @@ def _captured_demo_texts(profile: dict) -> list[str]:
             seen.add(t)
             out.append(t)
     return out
+
+
+def _captured_demo_texts(profile: dict) -> list[str]:
+    return captured_template_texts(profile)
 
 
 def check_residual_template_text(text: str, profile: dict) -> list[Finding]:

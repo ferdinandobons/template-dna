@@ -169,6 +169,8 @@ def _run_visual_audit(
                     f"visual fallback render failed: {detail}",
                 ))
                 findings.extend(vqa.check_page_count_sane(png_paths))
+            ocr_report = vqa.run_visual_ocr(png_paths, profile)
+            findings.extend(vqa.ocr_findings(ocr_report))
             manifest = vqa.build_visual_manifest(
                 profile=profile,
                 document=target,
@@ -178,6 +180,7 @@ def _run_visual_audit(
                 out_dir=resolved_out,
                 degraded=True,
                 environment_status=vqa.last_renderer_status(),
+                ocr_report=ocr_report,
             )
             findings.append(Finding(
                 "visual.manifest",
@@ -217,6 +220,8 @@ def _run_visual_audit(
 
     if qa == "deep":
         manifest_renderers_ok = renderers_ok if visual is not None else bool(png_paths)
+        ocr_report = vqa.run_visual_ocr(png_paths, profile)
+        findings.extend(vqa.ocr_findings(ocr_report))
         manifest = vqa.build_visual_manifest(
             profile=profile,
             document=target,
@@ -226,6 +231,7 @@ def _run_visual_audit(
             out_dir=resolved_out,
             degraded=bool(render_warnings) or not manifest_renderers_ok,
             environment_status=vqa.last_renderer_status(),
+            ocr_report=ocr_report,
         )
         findings.append(Finding(
             "visual.manifest",

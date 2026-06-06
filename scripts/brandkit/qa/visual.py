@@ -12,7 +12,9 @@ model: the qualitative L2 judgement is the orchestrator's job (driven by
     ``[]`` when they are absent;
   * runs **L1 deterministic pixel proxies** that catch defects L0 cannot see
     because they depend on the *rendered* layout (blank pages, content bleeding
-    past the printable margins, zero rendered pages). Each defect becomes one
+    past the printable margins, zero rendered pages). Optional OCR adds an
+    advisory rendered-text signal for residual placeholders when ``tesseract`` is
+    installed. Each defect becomes one
     :class:`~brandkit.qa.model.Finding` ``check="visual.<name>"``;
   * emits a structured **L2 manifest** (``visual_manifest.json``): the PNG paths
     per page plus a checklist derived from the profile (expected regions/roles,
@@ -48,6 +50,7 @@ from PIL import Image
 
 from brandkit import doctor
 from brandkit.profile import schema
+from brandkit.qa import checks_deterministic
 from brandkit.qa.model import Finding
 
 # A proxy input is either an already-opened PIL image or a path to a PNG.
@@ -58,6 +61,9 @@ ImageInput = Union["Image.Image", str, Path]
 # ---------------------------------------------------------------------------
 DEFAULT_DPI: int = 100        # 850x1100 for US-Letter portrait; enough for proxies
 RENDER_TIMEOUT_S: int = 90
+OCR_TIMEOUT_S: int = 30
+OCR_TEXT_LIMIT: int = 4000
+OCR_TERM_LIMIT: int = 80
 
 # ---------------------------------------------------------------------------
 # L1 proxy thresholds (module constants, motivated by measured render data).
@@ -570,6 +576,172 @@ def run_visual_l1(png_paths: list[Path]) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Optional OCR signal (rendered-text advisory; never a hard dependency)
+# ---------------------------------------------------------------------------
+def run_visual_ocr(
+    png_paths: list[Path],
+    profile: dict,
+    *,
+    timeout_s: int = OCR_TIMEOUT_S,
+) -> dict:
+    """Run optional OCR over rendered PNGs and compare against captured template text.
+
+    OCR is advisory: it helps the orchestrator spot visible stale placeholders,
+    stale TOC/cache text, or demo copy that the OOXML text scan missed. Missing or
+    failing OCR never blocks L0/L1. The report is designed to be embedded in the
+    visual manifest and converted to WARNING findings only for concrete hits.
+    """
+    terms = _ocr_terms(profile)
+    tesseract = shutil.which("tesseract")
+    report: dict = {
+        "engine": "tesseract",
+        "available": bool(tesseract),
+        "status": "ok" if tesseract else "unavailable",
+        "terms_checked": terms,
+        "pages": [],
+        "hits": [],
+        "errors": [],
+    }
+    if not png_paths:
+        report["status"] = "not_run"
+        report["reason"] = "no rendered pages"
+        return report
+    if not tesseract:
+        report["reason"] = "tesseract not found on PATH"
+        return report
+
+    for i, png in enumerate(png_paths, start=1):
+        text, error = _ocr_png(tesseract, Path(png), timeout_s=timeout_s)
+        if error:
+            report["errors"].append({"page": i, "error": error})
+            continue
+        page_hits = _ocr_hits(text, terms)
+        page = {
+            "index": i,
+            "text": _limit_ocr_text(text),
+            "text_truncated": len(text) > OCR_TEXT_LIMIT,
+        }
+        if page_hits:
+            page["hits"] = page_hits
+        report["pages"].append(page)
+        for hit in page_hits:
+            report["hits"].append({"page": i, **hit})
+
+    if report["errors"] and not report["pages"]:
+        report["status"] = "failed"
+    elif report["errors"]:
+        report["status"] = "partial"
+    return report
+
+
+def ocr_findings(report: dict) -> list[Finding]:
+    """Convert OCR report hits into advisory visual findings."""
+    findings: list[Finding] = []
+    for hit in report.get("hits") or []:
+        page = hit.get("page")
+        term = hit.get("term")
+        findings.append(Finding(
+            "visual.ocr_residual_text",
+            schema.Severity.WARNING.value,
+            f"OCR saw captured template text still visible: {term!r}",
+            location=f"page:{page}" if page else None,
+        ))
+    if report.get("status") in {"failed", "partial"} and report.get("errors"):
+        findings.append(Finding(
+            "visual.ocr_degraded",
+            schema.Severity.INFO.value,
+            "OCR visible-text scan did not complete for every rendered page",
+        ))
+    return findings
+
+
+def _empty_ocr_report(profile: dict, *, reason: str) -> dict:
+    return {
+        "engine": "tesseract",
+        "available": bool(shutil.which("tesseract")),
+        "status": "not_run",
+        "terms_checked": _ocr_terms(profile),
+        "pages": [],
+        "hits": [],
+        "errors": [],
+        "reason": reason,
+    }
+
+
+def _ocr_png(tesseract: str, png: Path, *, timeout_s: int) -> tuple[str, str | None]:
+    try:
+        proc = subprocess.run(
+            [tesseract, str(png), "stdout", "--psm", "6"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return "", f"tesseract timed out: {exc}"
+    except OSError as exc:
+        return "", f"tesseract failed: {exc}"
+    if proc.returncode != 0:
+        return "", (
+            _short_output(proc.stderr)
+            or _short_output(proc.stdout)
+            or f"exit code {proc.returncode}"
+        )
+    return proc.stdout or "", None
+
+
+def _ocr_terms(profile: dict) -> list[str]:
+    terms: list[str] = []
+    for term in checks_deterministic.captured_template_texts(profile, include_surface_prompts=True):
+        cleaned = _normalize_ocr_space(str(term))
+        if _has_ocr_signal(cleaned):
+            terms.append(cleaned)
+    seen: set[str] = set()
+    out: list[str] = []
+    for term in terms:
+        key = _normalize_ocr_match(term)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+        if len(out) >= OCR_TERM_LIMIT:
+            break
+    return out
+
+
+def _ocr_hits(text: str, terms: list[str]) -> list[dict]:
+    normalized_text = _normalize_ocr_match(text)
+    hits: list[dict] = []
+    if not normalized_text:
+        return hits
+    for term in terms:
+        needle = _normalize_ocr_match(term)
+        if needle and needle in normalized_text:
+            hits.append({"term": term})
+    return hits
+
+
+def _has_ocr_signal(term: str) -> bool:
+    alnum = sum(1 for ch in term if ch.isalnum())
+    return alnum >= 3 and len(term.strip()) >= 4
+
+
+def _normalize_ocr_space(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def _normalize_ocr_match(text: str) -> str:
+    return _normalize_ocr_space(text).casefold()
+
+
+def _limit_ocr_text(text: str) -> str:
+    text = _normalize_ocr_space(text)
+    if len(text) <= OCR_TEXT_LIMIT:
+        return text
+    return text[:OCR_TEXT_LIMIT]
+
+
+# ---------------------------------------------------------------------------
 # L2 manifest (model-free): PNG paths + profile-derived checklist + L1 findings
 # ---------------------------------------------------------------------------
 def _orientation(width: int, height: int) -> str:
@@ -710,6 +882,7 @@ def build_visual_manifest(
     out_dir: str | Path,
     degraded: bool | None = None,
     environment_status: dict | None = None,
+    ocr_report: dict | None = None,
 ) -> Path:
     """Build and write ``<out_dir>/visual_manifest.json`` (a SIDE artifact).
 
@@ -762,6 +935,7 @@ def build_visual_manifest(
             }
             for f in (l1_findings if renderers_ok else [])
         ],
+        "ocr": ocr_report or _empty_ocr_report(profile, reason="not requested by caller"),
         "checklist": derive_visual_checklist(profile),
         "environment": visual_environment_summary(
             environment_status,
@@ -799,6 +973,9 @@ def visual_environment_summary(
     binaries = status.get("binaries") or {}
     binary_errors = status.get("binary_errors") or {}
     optional_python = status.get("optional_python_deps") or {}
+    ocr_paths = status.get("ocr_binary_paths") or {}
+    ocr_binaries = status.get("ocr_binaries") or {}
+    ocr_errors = status.get("ocr_binary_errors") or {}
     renderers = {}
     for name in doctor.OPTIONAL_BINARIES:
         path = binary_paths.get(name) or shutil.which(name)
@@ -808,6 +985,16 @@ def visual_environment_summary(
         }
         if binary_errors.get(name):
             renderers[name]["error"] = binary_errors[name]
+    ocr = {}
+    for name, purpose in doctor.OPTIONAL_OCR_BINARIES.items():
+        path = ocr_paths.get(name) or shutil.which(name)
+        ocr[name] = {
+            "available": bool(ocr_binaries.get(name, bool(path))),
+            "path": path,
+            "purpose": purpose,
+        }
+        if ocr_errors.get(name):
+            ocr[name]["error"] = ocr_errors[name]
 
     hints = doctor.install_hints(status) if status else []
     return {
@@ -823,6 +1010,7 @@ def visual_environment_summary(
             }
             for name, purpose in doctor.OPTIONAL_PYTHON.items()
         },
+        "ocr": ocr,
         "install_hints": hints,
     }
 

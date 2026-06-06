@@ -6,9 +6,10 @@ targets, residual text, structural diffs). L0 stays unchanged and authoritative.
 The audit adds two stages that see what L0 cannot — the *rendered layout*:
 
 - **L1 — deterministic pixel proxies (engine).** The engine renders the output to
-  per-page PNGs and runs pixel checks that flag rendered-layout defects. Each
-  defect is a `Finding(check="visual.<name>")`, severity **WARNING** (never ERROR,
-  so the audit never fails a gate that L0 passes).
+  per-page PNGs and runs pixel checks that flag rendered-layout defects. During
+  `--qa deep`, optional Tesseract OCR also scans the rendered pages for captured
+  template/demo text. Each defect is a `Finding(check="visual.<name>")`, severity
+  **WARNING** (never ERROR, so the audit never fails a gate that L0 passes).
 - **L2 — qualitative judgement (orchestrator, i.e. you).** The engine emits a
   structured `visual_manifest.json` (PNG paths + a profile-derived checklist + the
   L1 findings). **You** open the PNGs, judge each checklist item PASS/FAIL, and
@@ -39,6 +40,9 @@ Notes:
 - `pdftoppm` remains the baseline PDF rasterizer. If it is missing or fails after
   LibreOffice produced a PDF, optional PyMuPDF (`fitz`) can rasterize the PDF as
   a degraded fallback; the manifest records this in `environment.optional_python`.
+- Optional OCR uses the external `tesseract` binary. Missing OCR does not block
+  the visual audit; it only means rendered residual-text proof is incomplete. The
+  manifest records OCR availability in `environment.ocr` and results in `ocr`.
 
 ## L1 proxies
 
@@ -47,6 +51,7 @@ Notes:
 | `visual.blank_page` | a blank/near-blank page: broken page, content not rendered, or overflow that pushed everything off the page | WARNING |
 | `visual.edge_bleed` | content touching/exceeding the printable margins (text/image clipping or overflow) — the defect `OverflowCapability.RENDER` exists to intercept | WARNING |
 | `visual.no_pages` | an existing output that rendered zero pages | WARNING |
+| `visual.ocr_residual_text` | optional OCR saw captured template/demo text still visible in the render | WARNING |
 
 The proxies are deterministic (aggregate luma/ink fractions, no randomness, no
 single-pixel font-hinting sensitivity) and conservative (tuned to render data:
@@ -78,6 +83,15 @@ Top-level fields:
   "l1_findings": [
     {"check": "visual.blank_page", "severity": "WARNING", "message": "...", "location": "page:2"}
   ],
+  "ocr": {
+    "engine": "tesseract",
+    "available": true,
+    "status": "ok",
+    "terms_checked": ["<captured template/demo text>"],
+    "pages": [{"index": 1, "text": "...", "text_truncated": false}],
+    "hits": [],
+    "errors": []
+  },
   "environment": {
     "platform": "macOS-...",
     "python": "3.x",
@@ -89,6 +103,9 @@ Top-level fields:
     },
     "optional_python": {
       "fitz": {"available": false, "purpose": "PyMuPDF PDF raster fallback"}
+    },
+    "ocr": {
+      "tesseract": {"available": true, "path": "/path/to/tesseract", "purpose": "optional OCR visible-text audit"}
     },
     "install_hints": []
   },
@@ -112,7 +129,7 @@ checklist is tailored to the template:
 |---|---|---|
 | `regions_present` | expected regions appear in order | `structure.skeleton[*].region + order` |
 | `cover_correct` | bound title, no duplicate, no demo prompt | `anchors.cover` + `comprehension.cover_slots` |
-| `no_residual_placeholder` | no template demo text visible | `surface.<kind>.demo_region` + cover demo values |
+| `no_residual_placeholder` | no template demo text visible | `surface.<kind>.demo_region` + cover demo values + optional `ocr.hits` |
 | `palette_on_brand` | on-screen colors are brand colors | `theme.colors` + `theme.palette_roles` |
 | `roles_styled` | semantic blocks carry brand styles, not "Normal" | `roles._index` |
 | `no_overlap` | no overlapping/clipped text or shapes | constant; reinforced by `visual.edge_bleed` |
@@ -125,10 +142,10 @@ checklist is tailored to the template:
 1. Generate with `--qa deep`.
 2. Read the manifest path from stdout (`visual manifest: <path>`).
 3. Open every `pages[*].png`. For each `checklist` item, judge PASS/FAIL against
-   the rendered pages, taking `l1_findings` into account (an L1 WARNING is a
-   pointer to a page/side worth looking at, not a verdict).
-4. If any item FAILS (or an L1 WARNING is a real defect on inspection): repair the
-   IntermediateDocument/content, regenerate, and re-run the audit.
+   the rendered pages, taking `l1_findings` and `ocr.hits` into account (an L1
+   WARNING is a pointer to a page/side worth looking at, not a verdict).
+4. If any item FAILS (or an L1/OCR WARNING is a real defect on inspection):
+   repair the IntermediateDocument/content, regenerate, and re-run the audit.
 5. Repeat until the checklist is clean — **max 3 iterations** by default — then
    return the file with an honest QA summary.
 

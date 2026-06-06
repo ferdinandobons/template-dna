@@ -45,6 +45,10 @@ Expected behavior:
   XLSX instead of treating DOCX success as proof for every Office format.
 - PyMuPDF (`fitz`) is now detected as an optional PDF raster fallback when
   `pdftoppm` is unavailable or fails after LibreOffice has produced a PDF.
+- Optional Tesseract OCR now scans rendered PNG pages during `--qa deep`, stores
+  page text and residual-template hits in `visual_manifest.json`, and emits
+  advisory `visual.ocr_residual_text` warnings for captured template strings that
+  are still visibly present.
 - Gated real-render E2E tests now cover `--qa deep` manifest/PNG generation for
   DOCX, PPTX, and XLSX when `BRANDDOCS_RUN_REAL_RENDER=1` is enabled.
 - DOCX generation now rewrites the visible cache of outline TOC fields from the
@@ -131,7 +135,19 @@ proxies.
 
 Add OCR only as an optional capability, not a hard dependency.
 
-Candidate stack:
+Status: implemented with Tesseract as an optional binary. OCR findings are
+advisory because OCR can be noisy across fonts, languages, and raster quality.
+
+Implemented baseline:
+
+- detect `tesseract` in `doctor`;
+- run OCR only when `--qa deep` has rendered PNGs;
+- compare OCR text against captured, template-specific demo/placeholder strings;
+- store `ocr.pages`, `ocr.hits`, `ocr.errors`, and availability diagnostics in
+  the visual manifest;
+- emit `visual.ocr_residual_text` warnings for concrete hits.
+
+Future candidate stack:
 
 - `tesseract` binary;
 - `pytesseract` Python wrapper.
@@ -202,4 +218,4 @@ HTML exports or dashboards, not as the main Office audit engine.
 5. Deepen stale TOC/cache rendering beyond outline DOCX fields.
 6. Add renderer disagreement checks on top of the PyMuPDF fallback.
 7. Add richer image analysis with `numpy` and `opencv-python` or `scikit-image`.
-8. Add optional OCR for residual visible text.
+8. Add OCR confidence scoring and richer stale-cache detection.

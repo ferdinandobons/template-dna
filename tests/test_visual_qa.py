@@ -28,6 +28,7 @@ from PIL import Image, ImageDraw
 
 from brandkit import doctor
 from brandkit.profile import schema
+from brandkit.qa import checks_deterministic
 from brandkit.qa import gate
 from brandkit.qa import visual as vqa
 
@@ -179,6 +180,10 @@ class RendererAvailabilityTest(unittest.TestCase):
                 "binary_paths": {"soffice": None, "pdftoppm": None},
                 "binary_errors": {},
                 "visual_qa": False,
+                "ocr_binaries": {"tesseract": False},
+                "ocr_binary_paths": {"tesseract": None},
+                "ocr_binary_errors": {},
+                "ocr_qa": False,
             }
             buf = StringIO()
             with redirect_stdout(buf):
@@ -195,6 +200,8 @@ class RendererAvailabilityTest(unittest.TestCase):
         self.assertIn("poppler", out)
         self.assertIn("install:fitz:", out)
         self.assertIn("PyMuPDF", out)
+        self.assertIn("ocr:tesseract:", out)
+        self.assertIn("install:tesseract:", out)
 
     def test_probe_marks_visual_unavailable_when_binary_probe_fails(self) -> None:
         """PATH presence alone is not enough; broken renderers must degrade."""
@@ -387,6 +394,26 @@ def _extract_real_profile(td: Path) -> dict:
 
 
 class ManifestTest(unittest.TestCase):
+    def test_captured_template_texts_include_surface_demo_values(self) -> None:
+        profile = {
+            "kind": "pptx",
+            "surface": {
+                "pptx": {
+                    "cover_anchors": [
+                        {"placeholder": "Click to edit Master title style"},
+                        {"demo_value": "Template demo value"},
+                    ]
+                }
+            },
+        }
+        self.assertEqual(checks_deterministic.captured_template_texts(profile), [])
+        texts = checks_deterministic.captured_template_texts(
+            profile,
+            include_surface_prompts=True,
+        )
+        self.assertIn("Click to edit Master title style", texts)
+        self.assertIn("Template demo value", texts)
+
     def test_build_manifest_shape(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
@@ -407,6 +434,10 @@ class ManifestTest(unittest.TestCase):
                     "binary_paths": {"soffice": "/usr/bin/soffice", "pdftoppm": "/usr/bin/pdftoppm"},
                     "binaries": {"soffice": True, "pdftoppm": True},
                     "binary_errors": {},
+                    "ocr_binary_paths": {"tesseract": "/usr/bin/tesseract"},
+                    "ocr_binaries": {"tesseract": True},
+                    "ocr_binary_errors": {},
+                    "ocr_qa": True,
                 },
             )
             self.assertTrue(manifest_path.is_file())
@@ -425,6 +456,9 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(data["environment"]["renderers"]["soffice"]["path"], "/usr/bin/soffice")
             self.assertEqual(data["environment"]["renderers"]["pdftoppm"]["available"], True)
             self.assertIn("fitz", data["environment"]["optional_python"])
+            self.assertEqual(data["environment"]["ocr"]["tesseract"]["path"], "/usr/bin/tesseract")
+            self.assertIn("ocr", data)
+            self.assertEqual(data["ocr"]["status"], "not_run")
             self.assertIn("platform", data["environment"])
 
     def test_checklist_derives_from_profile(self) -> None:
@@ -478,6 +512,52 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(data["pages"], [])
             self.assertEqual(data["l1_findings"], [])
             self.assertTrue(data["checklist"])  # still populated
+            self.assertEqual(data["ocr"]["status"], "not_run")
+
+    def test_visual_ocr_flags_rendered_residual_text(self) -> None:
+        orig_which = vqa.shutil.which
+        orig_run = subprocess.run
+        profile = {
+            "kind": "docx",
+            "surface": {
+                "docx": {
+                    "cover_anchors": [
+                        {"placeholder": "Old template subtitle"}
+                    ]
+                }
+            },
+        }
+
+        def fake_which(name):
+            if name == "tesseract":
+                return "/fake/tesseract"
+            return orig_which(name)
+
+        def fake_run(args, *unused_args, **unused_kwargs):
+            if args and Path(args[0]).name == "tesseract":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="Generated page\nOld template subtitle\n",
+                    stderr="",
+                )
+            return orig_run(args, *unused_args, **unused_kwargs)
+
+        vqa.shutil.which = fake_which
+        subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                png = td / "page-1.png"
+                _centered_content(width=100, height=100).save(png)
+                report = vqa.run_visual_ocr([png], profile)
+        finally:
+            vqa.shutil.which = orig_which
+            subprocess.run = orig_run
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["hits"][0]["term"], "Old template subtitle")
+        findings = vqa.ocr_findings(report)
+        self.assertEqual(findings[0].check, "visual.ocr_residual_text")
 
     def test_rasterize_pdf_uses_pymupdf_fallback_when_pdftoppm_missing(self) -> None:
         orig_which = vqa.shutil.which
@@ -695,6 +775,41 @@ class GateWiringTest(unittest.TestCase):
         finally:
             vqa.renderers_available = orig_available
             vqa.render_to_pngs = orig_render
+
+    def test_run_qa_deep_surfaces_ocr_hits_in_manifest(self) -> None:
+        orig_ocr = vqa.run_visual_ocr
+        try:
+            vqa.run_visual_ocr = lambda *args, **kwargs: {
+                "engine": "tesseract",
+                "available": True,
+                "status": "ok",
+                "terms_checked": ["Old template subtitle"],
+                "pages": [{"index": 1, "text": "Old template subtitle", "hits": [{"term": "Old template subtitle"}]}],
+                "hits": [{"page": 1, "term": "Old template subtitle"}],
+                "errors": [],
+            }
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                target = td / "out.docx"
+                out_dir = td / "out.visual"
+                _real_docx(target)
+                png = out_dir / "page-1.png"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                _centered_content().save(png)
+                report = gate.run_qa(
+                    target,
+                    _minimal_profile(),
+                    qa="deep",
+                    out_dir=out_dir,
+                    visual=(True, [png]),
+                )
+                manifest = [f for f in report.findings if f.check == "visual.manifest"]
+                data = json.loads(Path(manifest[0].location).read_text(encoding="utf-8"))
+        finally:
+            vqa.run_visual_ocr = orig_ocr
+
+        self.assertTrue(any(f.check == "visual.ocr_residual_text" for f in report.findings))
+        self.assertEqual(data["ocr"]["hits"][0]["term"], "Old template subtitle")
 
     def test_render_to_pngs_can_skip_availability_recheck(self) -> None:
         orig_available = vqa.renderers_available

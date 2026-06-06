@@ -3,6 +3,8 @@
 # probed by doctor.py - their absence degrades visual QA (L1/L2) but never blocks L0.
 # Optional fallback: install PyMuPDF separately (`python -m pip install PyMuPDF`)
 # to rasterize PDFs when pdftoppm is unavailable.
+# Optional OCR uses the external `tesseract` binary; it is probed by doctor.py
+# and is intentionally not a pip requirement.
 python-docx>=1.1
 python-pptx>=1.0
 openpyxl>=3.1
