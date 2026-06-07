@@ -12,6 +12,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/)
 [![CI](https://github.com/ferdinandobons/brand-docs/actions/workflows/ci.yml/badge.svg)](https://github.com/ferdinandobons/brand-docs/actions/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-GitHub%20Pages-16A34A.svg)](https://ferdinandobons.github.io/brand-docs/)
+[![Latest release](https://img.shields.io/github/v/release/ferdinandobons/brand-docs?label=latest%20release)](https://github.com/ferdinandobons/brand-docs/releases/latest)
 [![Skills](https://img.shields.io/badge/skills-docx%20·%20pptx%20·%20xlsx-6EA8FE.svg)](#the-three-skills)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-F59E0B.svg)](#project-status)
 
@@ -34,6 +35,7 @@
 - [Quick start](#quick-start)
 - [Website, AI discovery & listings](#website-ai-discovery--listings)
 - [Project status](#project-status)
+- [Changelog](#changelog)
 - [Development](#development)
 - [FAQ](#faq)
 - [License & acknowledgements](#license--acknowledgements)
@@ -322,6 +324,14 @@ copy, categories, tags and pull-request text reusable.
 | Richer image analysis | 🔭 planned |
 
 Visual Word overflow needs LibreOffice, since Word lays out at render time.
+
+---
+
+## Changelog
+
+The latest release is
+[v0.1.0](https://github.com/ferdinandobons/brand-docs/releases/tag/v0.1.0).
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ---
 
