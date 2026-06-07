@@ -1,128 +1,114 @@
-<svg width="1280" height="500" viewBox="0 0 1280 500" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">BrandDocs workflow</title>
-  <desc id="desc">BrandDocs turns real Word, PowerPoint and Excel templates into reusable AI document-generation skills by extracting a Brand Profile, composing from the original components, and verifying on-brand output.</desc>
-
+<svg width="1280" height="500" viewBox="0 0 1280 500" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BrandDocs: extract a company's Word, PowerPoint or Excel template into a reusable Brand Profile, then generate unlimited on-brand documents of the same format. One skill per format, no cross-format conversion.">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="500" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#F8FBFF"/>
-      <stop offset="0.55" stop-color="#EEF6FF"/>
-      <stop offset="1" stop-color="#F6F8FC"/>
+      <stop offset="0" stop-color="#0B1022"/>
+      <stop offset="0.55" stop-color="#111A36"/>
+      <stop offset="1" stop-color="#0C1430"/>
     </linearGradient>
-    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2563EB"/>
-      <stop offset="1" stop-color="#60A5FA"/>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6EA8FE"/>
+      <stop offset="1" stop-color="#5B8DEF"/>
     </linearGradient>
-    <linearGradient id="inkCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#14213D"/>
-      <stop offset="1" stop-color="#0F172A"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#1E3A8A" flood-opacity="0.14"/>
-    </filter>
-    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
-      <path d="M0 0 L12 6 L0 12 z" fill="#2563EB"/>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto">
+      <path d="M0 0 L9 4.5 L0 9 z" fill="#6EA8FE"/>
     </marker>
   </defs>
 
-  <rect width="1280" height="500" rx="26" fill="url(#bg)"/>
-  <rect x="1" y="1" width="1278" height="498" rx="26" fill="none" stroke="#CBD5E1" stroke-width="2"/>
+  <rect width="1280" height="500" rx="22" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1278" height="498" rx="22" fill="none" stroke="#FFFFFF" stroke-opacity="0.07"/>
 
-  <text x="56" y="68" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="46" font-weight="850" fill="#0F172A">Brand<tspan fill="#2563EB">Docs</tspan></text>
-  <text x="56" y="103" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="22" font-weight="700" fill="#334155">Template in. Brand-safe documents out.</text>
-  <text x="1224" y="62" text-anchor="end" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="18" font-weight="750" fill="#0F172A">Word / PowerPoint / Excel</text>
-  <text x="1224" y="91" text-anchor="end" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="17" font-weight="600" fill="#64748B">real components, not template imitation</text>
+  <!-- TOP BAND -->
+  <text x="48" y="80" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, sans-serif" font-size="44" font-weight="800" letter-spacing="-0.5" fill="#FFFFFF">Brand<tspan fill="#6EA8FE">Docs</tspan></text>
 
-  <line x1="56" y1="126" x2="1224" y2="126" stroke="#CBD5E1" stroke-width="1.4"/>
+  <text x="1232" y="56" text-anchor="end" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="600" fill="#C9D8F5">Your company's Office template, learned once.</text>
+  <text x="1232" y="83" text-anchor="end" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="500" fill="#9DB4E8">Unlimited on-brand documents, in the same format.</text>
 
-  <!-- Real template -->
-  <rect x="56" y="154" width="252" height="220" rx="20" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="2" filter="url(#shadow)"/>
-  <text x="82" y="190" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" font-weight="850" letter-spacing="1.2" fill="#2563EB">REAL TEMPLATE</text>
-  <text x="82" y="216" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="18" font-weight="800" fill="#0F172A">Your source of truth</text>
-  <text x="82" y="240" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="14.5" font-weight="650" fill="#64748B">Styles, sections, layouts</text>
-  <text x="82" y="260" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="14.5" font-weight="650" fill="#64748B">and formulas already live here.</text>
+  <line x1="48" y1="118" x2="1232" y2="118" stroke="#FFFFFF" stroke-opacity="0.08"/>
 
-  <rect x="82" y="276" width="118" height="72" rx="12" fill="#F8FAFC" stroke="#D6E1F0" stroke-width="1.5"/>
-  <rect x="82" y="276" width="118" height="22" rx="12" fill="#DBEAFE"/>
-  <circle cx="99" cy="287" r="5" fill="#2563EB"/>
-  <text x="103" y="335" font-family="Georgia, 'Times New Roman', serif" font-size="38" font-weight="800" fill="#1E293B">Aa</text>
-  <rect x="214" y="278" width="55" height="22" rx="8" fill="#DBEAFE"/>
-  <text x="241.5" y="293" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="800" fill="#1D4ED8">styles</text>
-  <rect x="214" y="307" width="65" height="22" rx="8" fill="#FFEDD5"/>
-  <text x="246.5" y="322" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="800" fill="#C2410C">layouts</text>
-  <rect x="214" y="336" width="76" height="22" rx="8" fill="#DCFCE7"/>
-  <text x="252" y="351" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="800" fill="#15803D">formulas</text>
+  <!-- NODE 1: company template -->
+  <rect x="64" y="164" width="186" height="178" rx="14" fill="#18223F" stroke="#33467A" stroke-width="2"/>
+  <rect x="64" y="164" width="186" height="34" rx="14" fill="#233A6B"/>
+  <circle cx="90" cy="181" r="7" fill="#6EA8FE"/>
+  <rect x="108" y="176" width="60" height="9" rx="4.5" fill="#5778B0"/>
+  <text x="90" y="254" font-family="Georgia, 'Times New Roman', serif" font-size="36" font-weight="700" fill="#EAF1FF">Aa</text>
+  <rect x="90" y="272" width="24" height="24" rx="6" fill="#2B7CD3"/>
+  <rect x="118" y="272" width="24" height="24" rx="6" fill="#E0742B"/>
+  <rect x="146" y="272" width="24" height="24" rx="6" fill="#2BA45F"/>
+  <rect x="174" y="272" width="24" height="24" rx="6" fill="#F472B6"/>
+  <rect x="90" y="312" width="140" height="8" rx="4" fill="#2E3C68"/>
+  <rect x="90" y="326" width="112" height="8" rx="4" fill="#283455"/>
+  <text x="157" y="372" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14.5" fill="#9DB4E8">your company template</text>
+  <text x="157" y="392" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" fill="#6E84B8">.docx · .pptx · .xlsx</text>
 
-  <!-- Extract arrow -->
-  <line x1="326" y1="264" x2="390" y2="264" stroke="#2563EB" stroke-width="3.5" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <text x="358" y="229" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="850" fill="#1D4ED8">EXTRACT</text>
-  <text x="358" y="246" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="850" fill="#1D4ED8">ONCE</text>
-  <text x="358" y="298" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="650" fill="#64748B">no guessing</text>
+  <!-- STEP 1: EXTRACT -->
+  <line x1="256" y1="254" x2="459" y2="254" stroke="#4A5E97" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <circle cx="323" cy="212" r="14" fill="#6EA8FE"/>
+  <text x="323" y="218" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0B1022">1</text>
+  <text x="343" y="218" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" fill="#9DC0FF">EXTRACT</text>
 
-  <!-- Brand Profile -->
-  <rect x="410" y="136" width="470" height="256" rx="24" fill="url(#inkCard)" filter="url(#shadow)"/>
-  <rect x="412" y="138" width="466" height="252" rx="22" fill="none" stroke="#60A5FA" stroke-width="2.2"/>
-  <text x="444" y="184" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="14" font-weight="850" letter-spacing="1.2" fill="#93C5FD">BRAND PROFILE</text>
-  <text x="444" y="219" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="29" font-weight="850" fill="#FFFFFF">Reusable component map</text>
-  <text x="444" y="248" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#BFD7FF">The agent composes with real template parts,</text>
-  <text x="444" y="271" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" font-weight="600" fill="#BFD7FF">then QA verifies every choice.</text>
-
-  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13.5" font-weight="800">
-    <rect x="444" y="292" width="132" height="34" rx="10" fill="#1E3A5F" stroke="#3B82F6"/>
-    <circle cx="461" cy="309" r="4" fill="#60A5FA"/>
-    <text x="474" y="314" fill="#EAF3FF">styles -> roles</text>
-    <rect x="590" y="292" width="112" height="34" rx="10" fill="#1E3A5F" stroke="#3B82F6"/>
-    <circle cx="607" cy="309" r="4" fill="#60A5FA"/>
-    <text x="620" y="314" fill="#EAF3FF">structure</text>
-    <rect x="716" y="292" width="120" height="34" rx="10" fill="#1E3A5F" stroke="#3B82F6"/>
-    <circle cx="733" cy="309" r="4" fill="#60A5FA"/>
-    <text x="746" y="314" fill="#EAF3FF">layouts</text>
-
-    <rect x="444" y="340" width="118" height="34" rx="10" fill="#183A2A" stroke="#22C55E"/>
-    <circle cx="461" cy="357" r="4" fill="#4ADE80"/>
-    <text x="474" y="362" fill="#E9FFF0">formulas</text>
-    <rect x="576" y="340" width="138" height="34" rx="10" fill="#3B2A16" stroke="#F97316"/>
-    <circle cx="593" cy="357" r="4" fill="#FDBA74"/>
-    <text x="606" y="362" fill="#FFF3E7">named ranges</text>
-    <rect x="728" y="340" width="108" height="34" rx="10" fill="#3B1D32" stroke="#EC4899"/>
-    <circle cx="745" cy="357" r="4" fill="#F9A8D4"/>
-    <text x="758" y="362" fill="#FFF0F8">brand kit</text>
+  <!-- NODE 2: Brand Profile -->
+  <g transform="translate(51,0)">
+  <rect x="414" y="152" width="320" height="206" rx="16" fill="#16213F" stroke="url(#accent)" stroke-width="2.2"/>
+  <g transform="translate(436,176)">
+    <rect x="0" y="0" width="34" height="34" rx="6" fill="#0E1730" stroke="#6EA8FE" stroke-width="2"/>
+    <rect x="8" y="0" width="18" height="11" rx="1.5" fill="#6EA8FE"/>
+    <rect x="8" y="19" width="18" height="12" rx="1.5" fill="none" stroke="#6EA8FE" stroke-width="1.6"/>
+  </g>
+  <text x="486" y="194" font-family="ui-sans-serif, system-ui, sans-serif" font-size="21" font-weight="700" fill="#FFFFFF">Brand Profile</text>
+  <text x="486" y="218" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#8FA6D8">your reusable brand-kit/</text>
+  <line x1="430" y1="236" x2="718" y2="236" stroke="#2C3A66"/>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="13.5" font-weight="500">
+    <rect x="430" y="252" width="138" height="34" rx="9" fill="#1C2A4C" stroke="#34467A"/>
+    <circle cx="444" cy="269" r="3" fill="#6EA8FE"/><text x="454" y="274" fill="#DCE7FF">colors &amp; fonts</text>
+    <rect x="578" y="252" width="140" height="34" rx="9" fill="#1C2A4C" stroke="#34467A"/>
+    <circle cx="592" cy="269" r="3" fill="#6EA8FE"/><text x="602" y="274" fill="#DCE7FF">styles -&gt; roles</text>
+    <rect x="430" y="294" width="138" height="34" rx="9" fill="#1C2A4C" stroke="#34467A"/>
+    <circle cx="444" cy="311" r="3" fill="#6EA8FE"/><text x="454" y="316" fill="#DCE7FF">structure</text>
+    <rect x="578" y="294" width="140" height="34" rx="9" fill="#1C2A4C" stroke="#34467A"/>
+    <circle cx="592" cy="311" r="3" fill="#6EA8FE"/><text x="602" y="316" fill="#DCE7FF">layouts &amp; logos</text>
+  </g>
   </g>
 
-  <!-- Generate arrow -->
-  <line x1="900" y1="264" x2="962" y2="264" stroke="#2563EB" stroke-width="3.5" stroke-linecap="round" marker-end="url(#arrow)"/>
-  <text x="931" y="229" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="850" fill="#1D4ED8">COMPOSE</text>
-  <text x="931" y="246" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="850" fill="#1D4ED8">+ QA</text>
-  <text x="931" y="298" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="650" fill="#64748B">from shell</text>
+  <!-- STEP 2: GENERATE -->
+  <line x1="791" y1="254" x2="994" y2="254" stroke="#4A5E97" stroke-width="3" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <circle cx="852" cy="212" r="14" fill="#6EA8FE"/>
+  <text x="852" y="218" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0B1022">2</text>
+  <text x="872" y="218" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" fill="#9DC0FF">GENERATE</text>
 
-  <!-- Output -->
-  <rect x="982" y="154" width="242" height="220" rx="20" fill="#FFFFFF" stroke="#D6E1F0" stroke-width="2" filter="url(#shadow)"/>
-  <text x="1008" y="190" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" font-weight="850" letter-spacing="1.2" fill="#16A34A">ON-BRAND OUTPUT</text>
-  <text x="1008" y="216" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="18" font-weight="800" fill="#0F172A">Reports, decks, workbooks</text>
+  <!-- NODE 3: on-brand documents (same format) -->
+  <g transform="translate(90,0)">
+  <rect x="940" y="172" width="170" height="160" rx="12" fill="#131D36" stroke="#29396A" stroke-width="1.6"/>
+  <rect x="925" y="184" width="170" height="160" rx="12" fill="#172340" stroke="#34467A" stroke-width="1.6"/>
+  <rect x="910" y="196" width="170" height="160" rx="12" fill="#1B2A4E" stroke="url(#accent)" stroke-width="2"/>
+  <rect x="910" y="196" width="170" height="30" rx="12" fill="#244A86"/>
+  <circle cx="930" cy="211" r="6" fill="#6EA8FE"/>
+  <rect x="944" y="207" width="56" height="8" rx="4" fill="#4E6BA8"/>
+  <rect x="928" y="242" width="20" height="20" rx="5" fill="#2B7CD3"/>
+  <rect x="954" y="242" width="20" height="20" rx="5" fill="#E0742B"/>
+  <rect x="980" y="242" width="20" height="20" rx="5" fill="#2BA45F"/>
+  <rect x="928" y="282" width="132" height="8" rx="4" fill="#33467A"/>
+  <rect x="928" y="298" width="108" height="8" rx="4" fill="#2C3C68"/>
+  <rect x="928" y="314" width="124" height="8" rx="4" fill="#2C3C68"/>
+  <text x="1010" y="382" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14.5" font-weight="500" fill="#C9D8F5">on-brand documents</text>
+  </g>
 
-  <rect x="1046" y="244" width="110" height="86" rx="12" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.6"/>
-  <rect x="1032" y="258" width="110" height="86" rx="12" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.6"/>
-  <rect x="1018" y="272" width="110" height="86" rx="12" fill="#F0FDF4" stroke="#86EFAC" stroke-width="1.8"/>
-  <rect x="1034" y="292" width="24" height="24" rx="7" fill="#2563EB"/>
-  <rect x="1064" y="292" width="24" height="24" rx="7" fill="#F97316"/>
-  <rect x="1094" y="292" width="24" height="24" rx="7" fill="#22C55E"/>
-  <rect x="1034" y="329" width="78" height="7" rx="3.5" fill="#94A3B8"/>
-  <rect x="1034" y="342" width="62" height="7" rx="3.5" fill="#CBD5E1"/>
+  <!-- FOOTER: one skill per format -->
+  <line x1="48" y1="430" x2="1232" y2="430" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <text x="64" y="468" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600" fill="#9DB4E8">One skill per format - same type in, same type out:</text>
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <rect x="466" y="447" width="150" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
+    <rect x="480" y="455" width="18" height="18" rx="4" fill="#102742" stroke="#2B7CD3" stroke-width="1.4"/>
+    <text x="489" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7FB6F2">W</text>
+    <text x="508" y="468" font-size="14" fill="#EAF1FF" font-weight="600">Word <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.docx</tspan></text>
 
-  <text x="1165" y="274" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13.5" font-weight="800" fill="#1D4ED8">same format</text>
-  <text x="1165" y="298" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13.5" font-weight="800" fill="#15803D">brand safe</text>
-  <text x="1165" y="322" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13.5" font-weight="800" fill="#C2410C">repeatable</text>
+    <rect x="632" y="447" width="202" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
+    <rect x="646" y="455" width="18" height="18" rx="4" fill="#33240F" stroke="#E0742B" stroke-width="1.4"/>
+    <text x="655" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#F2A368">P</text>
+    <text x="674" y="468" font-size="14" fill="#EAF1FF" font-weight="600">PowerPoint <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.pptx</tspan></text>
 
-  <!-- Promise band -->
-  <rect x="56" y="420" width="1168" height="52" rx="18" fill="#0F172A"/>
-  <text x="84" y="452" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="850" fill="#FFFFFF">Core promise:</text>
-  <text x="222" y="452" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700" fill="#DCEBFF">brand, structure, styles and formulas preserved by construction</text>
-
-  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13.5" font-weight="850">
-    <rect x="899" y="431" width="88" height="30" rx="10" fill="#1E3A5F" stroke="#3B82F6"/>
-    <text x="943" y="451" text-anchor="middle" fill="#BFDBFE">DOCX</text>
-    <rect x="1000" y="431" width="88" height="30" rx="10" fill="#3B2A16" stroke="#F97316"/>
-    <text x="1044" y="451" text-anchor="middle" fill="#FED7AA">PPTX</text>
-    <rect x="1101" y="431" width="88" height="30" rx="10" fill="#183A2A" stroke="#22C55E"/>
-    <text x="1145" y="451" text-anchor="middle" fill="#BBF7D0">XLSX</text>
+    <rect x="850" y="447" width="148" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
+    <rect x="864" y="455" width="18" height="18" rx="4" fill="#0F2A1C" stroke="#2BA45F" stroke-width="1.4"/>
+    <text x="873" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6FD79E">X</text>
+    <text x="892" y="468" font-size="14" fill="#EAF1FF" font-weight="600">Excel <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.xlsx</tspan></text>
   </g>
 </svg>
