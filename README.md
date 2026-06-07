@@ -11,6 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-3B82F6.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/)
 [![CI](https://github.com/ferdinandobons/brand-docs/actions/workflows/ci.yml/badge.svg)](https://github.com/ferdinandobons/brand-docs/actions/workflows/ci.yml)
+[![Website](https://img.shields.io/badge/website-GitHub%20Pages-16A34A.svg)](https://ferdinandobons.github.io/brand-docs/)
 [![Skills](https://img.shields.io/badge/skills-docx%20·%20pptx%20·%20xlsx-6EA8FE.svg)](#the-three-skills)
 [![Status: alpha](https://img.shields.io/badge/status-alpha-F59E0B.svg)](#project-status)
 
@@ -31,6 +32,7 @@
 - [The Brand Kit](#the-brand-kit)
 - [Prerequisites & installation](#prerequisites--installation)
 - [Quick start](#quick-start)
+- [Website, AI discovery & listings](#website-ai-discovery--listings)
 - [Project status](#project-status)
 - [Development](#development)
 - [FAQ](#faq)
@@ -281,6 +283,20 @@ The content you pass in (`idoc.json`) is an **IntermediateDocument** - brand-agn
 ```
 
 PowerPoint uses the same `IntermediateDocument`; Excel uses a `GridDocument` (named-region fills, formulas preserved).
+
+---
+
+## Website, AI discovery & listings
+
+- Public website: [ferdinandobons.github.io/brand-docs](https://ferdinandobons.github.io/brand-docs/)
+- AI crawler summary: [`docs/llms.txt`](docs/llms.txt)
+- Directory submission kit: [`docs/DIRECTORY_SUBMISSIONS.md`](docs/DIRECTORY_SUBMISSIONS.md)
+
+The website is a static GitHub Pages entry point for people searching for an
+AI Office document generator, Claude Code skill, Codex skill, document
+automation tool, or template-to-document workflow. `llms.txt` gives AI search
+systems a compact canonical summary, while the directory kit keeps listing
+copy, categories, tags and pull-request text reusable.
 
 ---
 

@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Office Document Generator from Word, PowerPoint & Excel Templates | BrandDocs</title>
+    <meta
+      name="description"
+      content="BrandDocs turns existing Word, PowerPoint and Excel templates into reusable AI document-generation skills for Claude Code and Codex. Generate on-brand .docx, .pptx and .xlsx files from the original template shell."
+    />
+    <meta
+      name="keywords"
+      content="AI document generator, Office document generator, Word template automation, PowerPoint template automation, Excel template automation, Claude Code skill, Codex skill, DOCX generator, PPTX generator, XLSX generator, OOXML, on-brand document generation"
+    />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <link rel="canonical" href="https://ferdinandobons.github.io/brand-docs/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="BrandDocs" />
+    <meta property="og:title" content="BrandDocs - AI Office Document Generator from Company Templates" />
+    <meta
+      property="og:description"
+      content="Turn a company's Word, PowerPoint or Excel template into unlimited on-brand .docx, .pptx and .xlsx documents. Local-first Claude Code and Codex skills."
+    />
+    <meta property="og:url" content="https://ferdinandobons.github.io/brand-docs/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="BrandDocs - AI Office Document Generator from Company Templates" />
+    <meta
+      name="twitter:description"
+      content="Generate faithful DOCX, PPTX and XLSX files from real company Office templates with Claude Code, Codex and compatible AI agents."
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172033;
+        --muted: #536079;
+        --line: #d9e2ef;
+        --bg: #f6f8fb;
+        --panel: #ffffff;
+        --blue: #2153ff;
+        --green: #11745f;
+        --orange: #a65b00;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        line-height: 1.55;
+      }
+      a {
+        color: var(--blue);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .wrap {
+        width: min(1120px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding: 18px 0;
+      }
+      .brand {
+        font-weight: 800;
+        letter-spacing: 0;
+        font-size: 20px;
+      }
+      .navlinks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        font-size: 14px;
+      }
+      .hero {
+        padding: 72px 0 56px;
+      }
+      .eyebrow {
+        color: var(--green);
+        font-weight: 700;
+        margin: 0 0 12px;
+        text-transform: uppercase;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+      }
+      h1 {
+        max-width: 900px;
+        margin: 0;
+        font-size: clamp(42px, 7vw, 74px);
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+      .lead {
+        max-width: 780px;
+        margin: 24px 0 0;
+        color: var(--muted);
+        font-size: 21px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 18px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 6px;
+        font-weight: 700;
+      }
+      .button.primary {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: #fff;
+      }
+      section {
+        padding: 48px 0;
+        border-top: 1px solid var(--line);
+      }
+      h2 {
+        margin: 0 0 18px;
+        font-size: 32px;
+        line-height: 1.15;
+        letter-spacing: 0;
+      }
+      h3 {
+        margin: 0 0 10px;
+        font-size: 20px;
+        letter-spacing: 0;
+      }
+      p {
+        margin: 0 0 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 20px;
+      }
+      .two {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+      .checklist {
+        padding-left: 18px;
+        margin: 0;
+      }
+      .checklist li {
+        margin: 7px 0;
+      }
+      .compare {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border: 1px solid var(--line);
+      }
+      .compare th,
+      .compare td {
+        border-bottom: 1px solid var(--line);
+        padding: 14px;
+        text-align: left;
+        vertical-align: top;
+      }
+      .compare th {
+        background: #eef3fb;
+      }
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      pre {
+        overflow-x: auto;
+        background: #111827;
+        color: #f8fafc;
+        padding: 16px;
+        border-radius: 8px;
+      }
+      .status {
+        color: var(--orange);
+        font-weight: 700;
+      }
+      footer {
+        padding: 36px 0;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+      }
+      @media (max-width: 820px) {
+        .grid,
+        .two {
+          grid-template-columns: 1fr;
+        }
+        nav {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .hero {
+          padding-top: 48px;
+        }
+      }
+    </style>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "BrandDocs",
+        "alternateName": "brand-docs",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Windows, Linux",
+        "programmingLanguage": "Python",
+        "softwareVersion": "0.1.0",
+        "license": "https://github.com/ferdinandobons/brand-docs/blob/main/LICENSE",
+        "url": "https://ferdinandobons.github.io/brand-docs/",
+        "codeRepository": "https://github.com/ferdinandobons/brand-docs",
+        "downloadUrl": "https://github.com/ferdinandobons/brand-docs",
+        "description": "BrandDocs turns existing Word, PowerPoint and Excel templates into reusable AI document-generation skills for Claude Code, Codex and compatible AI agents.",
+        "keywords": "AI document generator, Office document generator, DOCX generator, PPTX generator, XLSX generator, Claude Code skill, Codex skill, template automation, OOXML",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "author": {
+          "@type": "Person",
+          "name": "Ferdinando Bonsegna",
+          "url": "https://github.com/ferdinandobons"
+        }
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is BrandDocs?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "BrandDocs is an open-source Claude Code and Codex skill bundle that turns a company's Word, PowerPoint or Excel template into reusable AI document-generation skills."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How is BrandDocs different from a generic AI document generator?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Generic AI document generators freely create documents and loosely imitate templates. BrandDocs extracts a Brand Profile from the original Office template and generates from the real template shell, so brand styles, structure and formulas are preserved by construction."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Which Office formats does BrandDocs support?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "BrandDocs supports Word .docx, PowerPoint .pptx and Excel .xlsx through three agent skills: brand-docx, brand-pptx and brand-xlsx."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does BrandDocs run locally?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. BrandDocs is local-first and uses Python libraries such as python-docx, python-pptx, openpyxl, lxml and Pillow. Visual QA can optionally use LibreOffice, Poppler, PyMuPDF and Tesseract."
+            }
+          }
+        ]
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "HowTo",
+        "name": "Install BrandDocs as a Claude Code plugin",
+        "description": "Install BrandDocs and generate on-brand Office documents from company templates.",
+        "step": [
+          {
+            "@type": "HowToStep",
+            "name": "Add the plugin marketplace source",
+            "text": "/plugin marketplace add ferdinandobons/brand-docs"
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Install BrandDocs",
+            "text": "/plugin install brand-docs"
+          },
+          {
+            "@type": "HowToStep",
+            "name": "Attach a company Office template",
+            "text": "Ask the agent to use a Word, PowerPoint or Excel template and generate a new branded document."
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <header>
+      <nav class="wrap" aria-label="Primary navigation">
+        <a class="brand" href="https://ferdinandobons.github.io/brand-docs/">BrandDocs</a>
+        <div class="navlinks">
+          <a href="#use-cases">Use cases</a>
+          <a href="#how-it-works">How it works</a>
+          <a href="#comparison">Comparison</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/ferdinandobons/brand-docs">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="wrap">
+          <p class="eyebrow">Local-first Claude Code & Codex skill</p>
+          <h1>AI Office document generation from your real company templates.</h1>
+          <p class="lead">
+            BrandDocs turns Word, PowerPoint and Excel templates into reusable AI
+            document-generation skills. Generate faithful <code>.docx</code>,
+            <code>.pptx</code> and <code>.xlsx</code> files from the original template shell,
+            with brand drift blocked by verification.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/ferdinandobons/brand-docs">View on GitHub</a>
+            <a class="button" href="#install">Install</a>
+            <a class="button" href="https://github.com/ferdinandobons/brand-docs#why-not-just-ask-an-ai-to-use-this-template">Why it exists</a>
+          </div>
+        </div>
+      </section>
+
+      <section id="use-cases">
+        <div class="wrap">
+          <h2>Use cases</h2>
+          <div class="grid">
+            <article class="card">
+              <h3>Generate branded Word reports</h3>
+              <p>
+                Start from a corporate <code>.docx</code> template and produce reports,
+                memos or letters that keep the cover, table of contents, headings,
+                callouts, lists and tables in the template's structure.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Create PowerPoint decks from layouts</h3>
+              <p>
+                Extract real slide masters and layouts from a <code>.pptx</code>, then
+                generate title, section and content slides from typed AI content without
+                inventing off-brand layouts.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Fill Excel workbooks safely</h3>
+              <p>
+                Use named cells and regions in an <code>.xlsx</code> template while
+                preserving formulas, workbook structure and the author's intended inputs.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="how-it-works">
+        <div class="wrap two">
+          <div>
+            <h2>How BrandDocs works</h2>
+            <ol class="checklist">
+              <li><strong>Extract</strong> a reusable Brand Profile from a Word, PowerPoint or Excel template.</li>
+              <li><strong>Generate</strong> new content from the original template shell using brand-agnostic typed blocks.</li>
+              <li><strong>Verify</strong> styles, layouts, named ranges, formulas, residual template text and optional visual QA.</li>
+            </ol>
+          </div>
+          <div class="card">
+            <h3>Why the output stays on brand</h3>
+            <p>
+              The generator never writes literal style names, colors or fonts. Those
+              live in the extracted Brand Profile, and the QA gate fails when a profile
+              points to an artifact that the template does not define.
+            </p>
+            <p class="status">Current status: alpha, with DOCX as the reference vertical.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="comparison">
+        <div class="wrap">
+          <h2>BrandDocs vs generic AI document generation</h2>
+          <table class="compare">
+            <thead>
+              <tr>
+                <th>Need</th>
+                <th>Generic AI document generator</th>
+                <th>BrandDocs</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Use a real company template</td>
+                <td>Usually imitates the template visually.</td>
+                <td>Extracts the template into a reusable Brand Profile and generates from the original shell.</td>
+              </tr>
+              <tr>
+                <td>Preserve brand identity</td>
+                <td>Fonts, colors and structure can drift.</td>
+                <td>Uses only styles, layouts, ranges and artifacts the template actually defines.</td>
+              </tr>
+              <tr>
+                <td>Repeat the workflow</td>
+                <td>Requires re-explaining the brand each time.</td>
+                <td>Extract once, reuse the brand kit for future documents.</td>
+              </tr>
+              <tr>
+                <td>Excel formulas</td>
+                <td>Often treated as generic table content.</td>
+                <td>Named-region fills preserve shell formulas and workbook structure.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="install">
+        <div class="wrap two">
+          <div>
+            <h2>Install</h2>
+            <p>Claude Code plugin:</p>
+            <pre><code>/plugin marketplace add ferdinandobons/brand-docs
+/plugin install brand-docs</code></pre>
+          </div>
+          <div>
+            <h2>Direct CLI</h2>
+            <pre><code>git clone https://github.com/ferdinandobons/brand-docs.git
+cd brand-docs
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="faq">
+        <div class="wrap">
+          <h2>FAQ</h2>
+          <div class="grid">
+            <article class="card">
+              <h3>Is BrandDocs open source?</h3>
+              <p>Yes. BrandDocs is MIT licensed and self-contained.</p>
+            </article>
+            <article class="card">
+              <h3>Does it work with Codex?</h3>
+              <p>Yes. The skills are plain agent skills and the engine is a Python CLI.</p>
+            </article>
+            <article class="card">
+              <h3>Does it upload templates?</h3>
+              <p>No. BrandDocs is local-first; <code>brand-kit/</code> and generated outputs are git-ignored.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p>
+          BrandDocs is maintained by
+          <a href="https://github.com/ferdinandobons">Ferdinando Bonsegna</a>.
+          Source code:
+          <a href="https://github.com/ferdinandobons/brand-docs">github.com/ferdinandobons/brand-docs</a>.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

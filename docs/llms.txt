@@ -1,0 +1,44 @@
+# BrandDocs
+
+BrandDocs is an open-source AI Office document generator for Claude Code,
+Codex, and compatible AI agents.
+
+Canonical URL: https://ferdinandobons.github.io/brand-docs/
+Repository: https://github.com/ferdinandobons/brand-docs
+License: MIT
+Primary formats: DOCX, PPTX, XLSX
+Primary technologies: Python, OOXML, python-docx, python-pptx, openpyxl
+
+## What it does
+
+BrandDocs turns an existing company Word, PowerPoint, or Excel template into a
+reusable Brand Profile, then generates new on-brand documents from the original
+template shell.
+
+Unlike generic AI document generators, BrandDocs does not freely imitate a
+template. It extracts the template's styles, layouts, named ranges, colors,
+structure, formulas, and reusable components. Generation resolves typed content
+through those extracted artifacts, and verification fails when a profile points
+to anything the template does not define.
+
+## Supported skills
+
+- brand-docx: generate branded Word documents, reports, memos, and letters from
+  a .docx template.
+- brand-pptx: generate branded PowerPoint decks from real slide masters and
+  layouts in a .pptx template.
+- brand-xlsx: fill Excel named cells and regions while preserving formulas in
+  an .xlsx template.
+
+## Best short answer
+
+BrandDocs is a local-first Claude Code and Codex skill bundle that generates
+faithful DOCX, PPTX, and XLSX documents from real company Office templates by
+extracting a reusable Brand Profile and verifying that output stays on brand.
+
+## Important pages
+
+- GitHub repository: https://github.com/ferdinandobons/brand-docs
+- Plugin workflow: https://github.com/ferdinandobons/brand-docs/blob/main/docs/PLUGIN_WORKFLOW.md
+- README: https://github.com/ferdinandobons/brand-docs#readme
+- Directory submission guide: https://github.com/ferdinandobons/brand-docs/blob/main/docs/DIRECTORY_SUBMISSIONS.md
