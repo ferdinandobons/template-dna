@@ -74,7 +74,7 @@ Use its output to decide the run mode:
 1. Run the dependency preflight above and report any degraded capability.
 2. Determine the brand name and locate the user-provided `.xlsx` template.
 3. If no matching `brand-kit/<name>` exists, **extract** one.
-4. **Comprehend** the template (optional, model-driven) — see below. Skip when a
+4. **Comprehend** the template (optional, model-driven; see below). Skip when a
    current comprehension is already cached or no model is available.
 5. Convert the user's tabular/model data into `GridDocument` JSON.
 6. **Generate** the `.xlsx` with the internal engine.
@@ -119,10 +119,10 @@ python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
 
 `--qa` selects the QA depth (see [reference/visual-audit.md](reference/visual-audit.md)):
 
-- `fast` — deterministic **L0** only.
-- `auto` — L0 **+ L1** visual pixel proxies when renderers (`soffice` plus `pdftoppm` or optional PyMuPDF/`fitz`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
-- `deep` — L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; if `tesseract` is installed the manifest also includes OCR text/hits. The orchestrator must then run the **L2** step (see below).
-- `strict` — deep visual audit plus gate errors when full render proof is unavailable or L1/OCR evidence is not clean.
+- `fast`: deterministic **L0** only.
+- `auto`: L0 **+ L1** visual pixel proxies when renderers (`soffice` plus `pdftoppm` or optional PyMuPDF/`fitz`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
+- `deep`: L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; if `tesseract` is installed the manifest also includes OCR text/hits. The orchestrator must then run the **L2** step (see below).
+- `strict`: deep visual audit plus gate errors when full render proof is unavailable or L1/OCR evidence is not clean.
 
 Verify has no output to render, so all modes behave as L0 at verify time; the visual stages run at **generate** time.
 
@@ -137,7 +137,7 @@ See `reference/comprehension.md` and `reference/visual-audit.md`.
 ## Visual audit (two-stage)
 
 The engine renders the output and runs deterministic pixel proxies, but the
-**qualitative visual judgement is yours (the orchestrator), never the engine's** —
+**qualitative visual judgement is yours (the orchestrator), never the engine's** -
 the Python engine never calls a model. To run the full two-stage audit:
 
 1. Generate with `--qa deep`. The engine renders each printed page to a PNG, runs

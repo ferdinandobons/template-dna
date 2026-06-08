@@ -20,7 +20,7 @@ flow (Security → Advisories), or email the maintainer at
 `1bonsegnaferdinando@gmail.com` with:
 
 - a description of the issue and its impact,
-- steps to reproduce (a minimal **synthetic** template is ideal — never send
+- steps to reproduce (a minimal **synthetic** template is ideal - never send
   real company files),
 - any suggested remediation.
 
@@ -31,11 +31,11 @@ You can expect an acknowledgement within **7 days** and a status update within
 
 BrandDocs parses untrusted Office (OOXML) files. Areas of particular interest:
 
-- **XML parsing** — XXE, billion-laughs / entity-expansion, zip-bomb style
+- **XML parsing**: XXE, billion-laughs / entity-expansion, zip-bomb style
   payloads in `.docx` / `.pptx` / `.xlsx`.
-- **Path handling** — zip-slip / path traversal when unpacking template parts
+- **Path handling**: zip-slip / path traversal when unpacking template parts
   or writing a `brand-kit/`.
-- **Formula / macro content** — preserved cell formulas and any embedded
+- **Formula / macro content**: preserved cell formulas and any embedded
   active content.
 
 The engine is self-contained (`python-docx` / `python-pptx` / `openpyxl` +

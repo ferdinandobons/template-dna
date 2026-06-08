@@ -10,10 +10,10 @@ M1 implements deterministic L0 checks:
 On top of L0, a two-stage visual audit runs when renderers are present and the
 QA mode asks for it:
 
-- **L1** — deterministic pixel proxies on the rendered PNGs (`visual.blank_page`,
+- **L1**: deterministic pixel proxies on the rendered PNGs (`visual.blank_page`,
   `visual.edge_bleed`, `visual.no_pages`), each a WARNING that never fails the
   gate by itself.
-- **L2** — a `visual_manifest.json` (PNG paths + a profile-derived checklist) the
+- **L2**: a `visual_manifest.json` (PNG paths + a profile-derived checklist) the
   orchestrator reads to make the qualitative judgement and drive a repair loop.
   The engine never calls a model.
 

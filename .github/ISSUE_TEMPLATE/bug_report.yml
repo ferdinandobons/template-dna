@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for filing a bug! Please **never attach real company templates**
-        — reproduce with a synthetic `.docx` / `.pptx` / `.xlsx` instead.
+        - reproduce with a synthetic `.docx` / `.pptx` / `.xlsx` instead.
   - type: dropdown
     id: skill
     attributes:

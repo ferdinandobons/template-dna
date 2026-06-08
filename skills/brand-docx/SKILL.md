@@ -76,7 +76,7 @@ Use its output to decide the run mode:
 1. Run the dependency preflight above and report any degraded capability.
 2. Determine the brand name and locate the user-provided `.docx` template.
 3. If no matching `brand-kit/<name>` exists, **extract** one.
-4. **Comprehend** the template (optional, model-driven) — see below. Skip when a
+4. **Comprehend** the template (optional, model-driven; see below). Skip when a
    current comprehension is already cached or no model is available.
 5. Convert the user's requested content into `IntermediateDocument` JSON.
 6. **Generate** the `.docx` with the internal engine.
@@ -111,10 +111,10 @@ python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
 
 `--qa` selects the QA depth (see [reference/visual-audit.md](reference/visual-audit.md)):
 
-- `fast` — deterministic **L0** only (schema, resolver targets, residual text, structural diffs).
-- `auto` — L0 **+ L1** visual pixel proxies when renderers (`soffice` plus `pdftoppm` or optional PyMuPDF/`fitz`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
-- `deep` — L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; if `tesseract` is installed the manifest also includes OCR text/hits. The orchestrator must then run the **L2** step (see below).
-- `strict` — deep visual audit plus gate errors when full render proof is unavailable or L1/OCR evidence is not clean.
+- `fast`: deterministic **L0** only (schema, resolver targets, residual text, structural diffs).
+- `auto`: L0 **+ L1** visual pixel proxies when renderers (`soffice` plus `pdftoppm` or optional PyMuPDF/`fitz`) are present; otherwise L0 plus a single INFO `visual.unavailable`.
+- `deep`: L0 + L1 **+ a `visual_manifest.json`** and per-page PNGs; if `tesseract` is installed the manifest also includes OCR text/hits. The orchestrator must then run the **L2** step (see below).
+- `strict`: deep visual audit plus gate errors when full render proof is unavailable or L1/OCR evidence is not clean.
 
 Verify has no output to render, so all modes behave as L0 at verify time; the visual stages run at **generate** time.
 
@@ -131,7 +131,7 @@ See `reference/comprehension.md`, `reference/profile-schema.md`,
 ## Visual audit (two-stage)
 
 The engine renders the output and runs deterministic pixel proxies, but the
-**qualitative visual judgement is yours (the orchestrator), never the engine's** —
+**qualitative visual judgement is yours (the orchestrator), never the engine's** -
 the Python engine never calls a model. To run the full two-stage audit:
 
 1. Generate with `--qa deep`. The engine renders each page to a PNG, runs the L1
@@ -169,8 +169,8 @@ unresolved roles, markdown literals, and residual demo text.
 
 When a current comprehension is present, generation also fills the cover slots in
 place (no duplicate title) and reconciles preserved indexes (a table of contents,
-a list of tables/figures) against the new content — regenerating, preserving, or
-purging stale entries — instead of carrying demo entries forward. Destructive
+a list of tables/figures) against the new content (regenerating, preserving, or
+purging stale entries) instead of carrying demo entries forward. Destructive
 reconciliation is bounded: a clear/remove is honored only when determinism
 corroborates and confidence clears a threshold, else the structure is kept with a
 warning.

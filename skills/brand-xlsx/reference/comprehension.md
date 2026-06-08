@@ -25,7 +25,7 @@ current comprehension already exists or no model is available.
 ## When to run it
 
 Run `comprehend` once per template shell, right after `extract`, **before**
-`generate`. Skip it when a current comprehension is already cached — that is,
+`generate`. Skip it when a current comprehension is already cached, that is,
 when the profile's `comprehension.status` is `present` **and** its
 `source_shell_sha256` equals the live `provenance.shell.sha256`. A re-extract
 produces a new shell and resets `comprehension.status` to `absent`, so re-run
@@ -47,7 +47,7 @@ python scripts/brandkit/cli.py comprehend --name <brand> --input comprehension.j
 
 `comprehend-input` prints `{facts, excerpt}`: `facts` is the surfaced,
 format-uniform inventory the model reasons over and binds to (`inventories`:
-`cover_anchors`, `fields`, `regions`, `roles` — each entry an `{"id": ...}`),
+`cover_anchors`, `fields`, `regions`, `roles`, each entry an `{"id": ...}`),
 plus `structure`/`anchors`/`styles` slices; `excerpt` is an ordered,
 length-capped sample of text the extractor already collected. **Read this
 bundle. Never parse the raw template or its OOXML.**
@@ -56,7 +56,7 @@ bundle. Never parse the raw template or its OOXML.**
 full schema validation **and** a fail-closed membership check, and only on a
 clean pass freezes the block into `profile.json` with `status='present'`,
 stamping `source_shell_sha256` from the live shell hash. On any finding it writes
-`status='rejected'` with the findings and exits non-zero — read the findings, fix
+`status='rejected'` with the findings and exits non-zero; read the findings, fix
 the offending refs, and retry. A clean merge is idempotent: running `comprehend`
 twice yields a byte-identical `profile.json`.
 
@@ -74,7 +74,7 @@ document, a PowerPoint deck, or an Excel workbook.
    content the author is meant to replace, and which hold real, structural
    content to keep? Record each in `demo_classification` with a `verdict`.
 3. **Which artifacts feed which index?** For each surfaced derived index (a table
-   of contents, a list of tables/figures, an agenda/section list — anything the
+   of contents, a list of tables/figures, an agenda/section list, anything the
    document regenerates from its own content), which role's items feed it, and
    should it be regenerated, preserved, or cleared? Record it in
    `conventions.indexes`.
@@ -91,8 +91,8 @@ document, a PowerPoint deck, or an Excel workbook.
 
 Concretely, in the comprehension JSON:
 
-- Every **load-bearing reference** — a `cover_slots` key (`anchor_ref`), an
-  `index_ref`, a `region_ref`, a `feeds_from_role_id`, a `role_annotations` key —
+- Every **load-bearing reference** - a `cover_slots` key (`anchor_ref`), an
+  `index_ref`, a `region_ref`, a `feeds_from_role_id`, a `role_annotations` key -
   **must be a verbatim id copied from the facts bundle**. If an id is not in the
   surfaced inventory, do not invent it; the merge is fail-closed and will reject
   it (a ref into an empty inventory is itself an error).
@@ -100,8 +100,8 @@ Concretely, in the comprehension JSON:
   `status` (`present|absent|rejected`), `fill_rule` (`in_place|clear|leave`),
   `reconcile` (`regenerate|preserve|clear`), `verdict` (`demo|real|mixed`). Use
   exactly those values.
-- Every other field — `semantic_role`, `kind`, `purpose`, `generation_rules`,
-  `evidence`, region names — is an **open advisory token**. The generator never
+- Every other field (`semantic_role`, `kind`, `purpose`, `generation_rules`,
+  `evidence`, region names) is an **open advisory token**. The generator never
   pattern-matches on it, so write it honestly for a human reader; never bend it
   to fit a fixed vocabulary.
 
@@ -148,5 +148,5 @@ contains them. Derived-index fields are format-specific: DOCX can expose TOC/lis
 fields, PPTX can expose an agenda/section-list field when present, and XLSX keeps
 `fields` intentionally empty because workbooks have no TOC-style field code. The
 model writes only the parts it has ids for; never force a cover, index, or region
-shape onto an empty inventory — a ref into an empty inventory is fail-closed and
+shape onto an empty inventory; a ref into an empty inventory is fail-closed and
 will be rejected.

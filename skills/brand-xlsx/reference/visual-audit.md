@@ -3,14 +3,14 @@
 
 The visual audit sits **on top of** the L0 deterministic gate (schema, resolver
 targets, residual text, structural diffs). L0 stays unchanged and authoritative.
-The audit adds two stages that see what L0 cannot — the *rendered layout*:
+The audit adds two stages that see what L0 cannot, the *rendered layout*:
 
-- **L1 — deterministic pixel proxies (engine).** The engine renders the output to
+- **L1: deterministic pixel proxies (engine).** The engine renders the output to
   per-page PNGs and runs pixel checks that flag rendered-layout defects. During
   `--qa deep`, optional Tesseract OCR also scans the rendered pages for captured
   template/demo text. Each defect is a `Finding(check="visual.<name>")`, severity
   **WARNING** (never ERROR, so the audit never fails a gate that L0 passes).
-- **L2 — qualitative judgement (orchestrator, i.e. you).** The engine emits a
+- **L2: qualitative judgement (orchestrator, i.e. you).** The engine emits a
   structured `visual_manifest.json` (PNG paths + a profile-derived checklist + the
   L1 findings). **You** open the PNGs, judge each checklist item PASS/FAIL, and
   drive a repair loop. The engine **never** calls a model.
@@ -52,7 +52,7 @@ Notes:
 | check id | catches (that L0 cannot see) | severity |
 |---|---|---|
 | `visual.blank_page` | a blank/near-blank page: broken page, content not rendered, or overflow that pushed everything off the page | WARNING |
-| `visual.edge_bleed` | content touching/exceeding the printable margins (text/image clipping or overflow) — the defect `OverflowCapability.RENDER` exists to intercept | WARNING |
+| `visual.edge_bleed` | content touching/exceeding the printable margins (text/image clipping or overflow); the defect `OverflowCapability.RENDER` exists to intercept | WARNING |
 | `visual.no_pages` | an existing output that rendered zero pages | WARNING |
 | `visual.ocr_residual_text` | optional OCR saw captured template/demo text still visible in the render | WARNING |
 
@@ -156,7 +156,7 @@ checklist is tailored to the template:
    WARNING is a pointer to a page/side worth looking at, not a verdict).
 4. If any item FAILS (or an L1/OCR WARNING is a real defect on inspection):
    repair the IntermediateDocument/content, regenerate, and re-run the audit.
-5. Repeat until the checklist is clean — **max 3 iterations** by default — then
+5. Repeat until the checklist is clean (**max 3 iterations** by default), then
    return the file with an honest QA summary.
 6. For release-quality validation, rerun with `--qa strict`; any `visual.strict`
    ERROR identifies the exact visual finding that still needs targeted repair.

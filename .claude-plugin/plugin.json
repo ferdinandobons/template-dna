@@ -1,6 +1,6 @@
 {
   "name": "brand-docs",
-  "description": "AI on-brand document generator for Claude Code & Codex: turn a company's Word, PowerPoint or Excel template into unlimited on-brand .docx/.pptx/.xlsx. Extracts a reusable Brand Profile once — off-brand output impossible by construction. Skills: brand-docx, brand-pptx, brand-xlsx.",
+  "description": "AI on-brand document generator for Claude Code & Codex: turn a company's Word, PowerPoint or Excel template into unlimited on-brand .docx/.pptx/.xlsx. Extracts a reusable Brand Profile once - off-brand output impossible by construction. Skills: brand-docx, brand-pptx, brand-xlsx.",
   "version": "0.1.0",
   "author": { "name": "Ferdinando Bonsegna" },
   "license": "MIT",

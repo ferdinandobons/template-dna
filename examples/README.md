@@ -15,8 +15,8 @@ Brand palette (cohesive with the project hero): BrandDocs navy `#16213F`, blue `
 amber `#E0742B`, on light `#EAF1FF` / band `#DCE7FF`.
 
 Each template ships realistic, internally-consistent **synthetic** sample content and visible
-brand polish — a coloured cover band, a generated text-only BrandDocs wordmark logo, and
-brand-coloured native charts — so the rendered file already reads as a finished
+brand polish - a coloured cover band, a generated text-only BrandDocs wordmark logo, and
+brand-coloured native charts - so the rendered file already reads as a finished
 on-brand document. The body is
 demo content a generation run clears and replaces; the cover, indexes and named slots are the
 reusable surface the skills extract.
