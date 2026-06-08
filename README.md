@@ -35,7 +35,7 @@
 | **Works with** | Claude Code, Codex, compatible AI agents, or the direct Python CLI |
 | **Best for** | Repeatable reports, decks, workbooks, proposals, memos, briefs, and internal document workflows |
 | **Privacy model** | Local-first; no cloud service is required, and real templates are git-ignored |
-| **Current release** | [v0.4.0](https://github.com/ferdinandobons/brand-docs/releases/tag/v0.4.0) alpha |
+| **Current release** | [v0.5.0](https://github.com/ferdinandobons/brand-docs/releases/tag/v0.5.0) alpha |
 
 ---
 
@@ -45,7 +45,7 @@
 |---|---|---|
 | **`brand-docx`** | Word `.docx` | reports, letters, memos, in the template's structural order |
 | **`brand-pptx`** | PowerPoint `.pptx` | decks from the template's real masters & layouts, with native charts, diagrams & merged tables |
-| **`brand-xlsx`** | Excel `.xlsx` | workbooks: named-region fills with **formulas preserved** |
+| **`brand-xlsx`** | Excel `.xlsx` | workbooks: named-region fills with **formulas preserved** and brand number formats |
 
 All three share one engine and expose the same verbs: **`extract` → `verify` → `generate`**. Details → [documentation/SKILLS.md](documentation/SKILLS.md).
 
@@ -131,7 +131,7 @@ The input (`idoc.json`) is an **IntermediateDocument** of brand-agnostic typed b
 
 ## Changelog
 
-Latest release: [v0.4.0](https://github.com/ferdinandobons/brand-docs/releases/tag/v0.4.0). See [CHANGELOG.md](CHANGELOG.md).
+Latest release: [v0.5.0](https://github.com/ferdinandobons/brand-docs/releases/tag/v0.5.0). See [CHANGELOG.md](CHANGELOG.md).
 
 ## License & acknowledgements
 

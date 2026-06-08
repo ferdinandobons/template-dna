@@ -4,6 +4,13 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-08
+
+Completes the block-type matrix: Word now renders **every** block type natively
+(the `toc` block was the last to degrade), and Excel resolves a cell's semantic
+number format to the template's own mask. Brand Profiles from 0.1.x-0.4.0 keep
+working unchanged; an absent comprehension is still the deterministic path.
+
 ### Added
 
 - **Word `toc` blocks render natively.** The `toc` block was the last block type
@@ -228,6 +235,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.5.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.5.0
 [0.4.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.2.0

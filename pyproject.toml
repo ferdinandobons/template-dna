@@ -8,7 +8,7 @@
 # [tool.ruff] here), so it is intentionally not duplicated below.
 [project]
 name = "brand-docs"
-version = "0.4.0"
+version = "0.5.0"
 description = "AI on-brand document generator: turn a company's Office template into unlimited on-brand .docx/.pptx/.xlsx."
 requires-python = ">=3.10"
 license = { text = "MIT" }
