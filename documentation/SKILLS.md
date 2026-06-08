@@ -38,6 +38,8 @@ are catching up.
 | `brand-xlsx`: named-region fills, formula-preserving, native charts | ✅ working (fidelity still catching up to docx) |
 | Visual QA (LibreOffice render + manifest-driven repair loop) | 🚧 implemented with graceful degraded mode |
 | Native charts (DOCX / PPTX / XLSX), SmartArt diagrams (DOCX / PPTX), merged tables | ✅ working |
+| Native Word `toc` (authored field, or deferral to a preserved outline TOC) | ✅ working |
+| Excel semantic number formats (`number.<family>` resolved to the template's mask) | ✅ working |
 | Model-driven reusable-fragment population (`comprehend` → `components` / `sections`, with `{{slot}}` substitution) | ✅ working |
 | PyMuPDF PDF raster fallback | ✅ working |
 | Optional OCR rendered-text residual scan | ✅ working when Tesseract is installed |

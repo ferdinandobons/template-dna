@@ -32,11 +32,13 @@ them; the model can never widen the brand guarantee.
 ## Supported skills
 
 - brand-docx: generate branded Word documents, reports, memos, and letters from
-  a .docx template.
+  a .docx template; every block type renders natively, including charts, diagrams,
+  and a real updateable table of contents.
 - brand-pptx: generate branded PowerPoint decks from real slide masters and
   layouts in a .pptx template, with native charts, diagrams and merged tables.
 - brand-xlsx: fill Excel named cells and regions while preserving formulas in
-  an .xlsx template.
+  an .xlsx template, applying the template's own number formats to a cell's
+  semantic intent (currency, percent, date, ...).
 
 ## Best short answer
 

@@ -4,6 +4,30 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Word `toc` blocks render natively.** The `toc` block was the last block type
+  that degraded instead of rendering; it now authors a real, updateable outline
+  table-of-contents field. If the shell already carries an outline TOC the block
+  defers to it (refreshed in place, never a duplicate); otherwise it authors a
+  native outline TOC field at the block's position, with its visible cache filled
+  from the generated headings and the field marked dirty + `updateFields` so Word
+  rebuilds it on open. It defers only to an OUTLINE TOC, so a shell shipping only a
+  table-of-figures still gets its requested table of contents. Byte-idempotent.
+  Every Word block type now renders natively.
+- **Excel resolves a cell's semantic number format.** The `number_format` resolver
+  type is now wired end-to-end (previously reserved/staged). `extract` classifies
+  the template's own number-format masks into brand-agnostic families
+  (`currency`/`percent`/`date`/`datetime`/`time`/`accounting`/`decimal`/`integer`/
+  `text`/`scientific`) and emits a `number.<family>` role bound to the template's
+  VERBATIM mask. A `GridDocument` names the intent via `formats: {name: family}`
+  (keyed by the same named-range/cell vocabulary as `cells`/`regions`); generation
+  resolves `number.<family>` and applies the template's own mask to the filled
+  cell(s). A format is never fabricated: an intent the template does not carry
+  degrades loudly (`number_format_degraded`) and leaves the existing format, and a
+  resolver whose mask is not in the template's surfaced formats is rejected at
+  validation.
+
 ## [0.4.0] - 2026-06-08
 
 Model-driven reusable-fragment population completes the comprehension vertical,

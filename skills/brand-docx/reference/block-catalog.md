@@ -9,9 +9,12 @@ registry is the closed set of `type` discriminators).
 Inline text is a **rich-run array** (`runs: [{t, b?, i?, u?, code?, link?}]`); a
 bare `text: "..."` is accepted as sugar and normalized to runs on parse.
 
-M1 DOCX generation renders `heading`, `paragraph`, `callout`, `list`, `table`, and
-`pagebreak` fully; the remaining types are present in the model and degrade
-gracefully where a format's generator does not yet realize them natively.
+DOCX generation now renders **every** block type natively - `heading`,
+`paragraph`, `callout`, `list`, `table`, `quote`, `caption`, `divider`, `image`,
+`kpi`, `chart`, `smartart`, `toc`, `pagebreak` - and `component`/`section` expand
+to their primitive sub-blocks before rendering. PPTX and XLSX share the engine and
+render their applicable types, degrading **loudly** (a visible `block_degraded`
+finding, never a silent drop) only where a format does not yet realize one.
 
 ## Block types
 
@@ -67,7 +70,10 @@ The 16 block `type` values (the keys of `BLOCK_TYPES`):
 - **`caption`** - a figure/table caption line. Carries `runs` and an optional
   `target` (`"figure"` | `"table"`). Resolves to `caption`.
 - **`toc`** - a table-of-contents marker. Carries an optional `title` and
-  `max_level` (default `3`). The generator refreshes the live TOC field.
+  `max_level` (default `3`). On DOCX it renders natively: if the shell already
+  carries an outline TOC it defers to it (refreshed in place, no duplicate);
+  otherwise it authors a native, updateable outline TOC field at the block's
+  position (its visible cache filled from the document's headings).
 - **`image`** - an image reference. Carries `asset` (a profile asset id) or `src`
   (an external path) - exactly one - plus optional `alt`, `caption`, and
   `width_emu`/`height_emu` sizing hints. Resolves to an image placement.
