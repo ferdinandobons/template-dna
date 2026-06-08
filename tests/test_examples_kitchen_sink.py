@@ -461,6 +461,54 @@ class XlsxKitchenSink(_Base):
                 hashlib.sha256(b.read_bytes()).hexdigest(),
             )
 
+    def test_kitchen_sink_authors_native_chart(self):
+        # Exercise the NATIVE xlsx chart writer against the example template: chart
+        # the showcase's own 'Data' sheet numbers (D2:D4, labels A2:A4). A real chart
+        # part must be authored, with no degradation and a non-failed QA verdict.
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            grid = GridDocument(
+                charts=[
+                    {
+                        "sheet": "Data",
+                        "type": "bar",
+                        "title": "Volumi",
+                        "anchor": "F2",
+                        "data": "D2:D4",
+                        "categories": "A2:A4",
+                        "data_titles": False,
+                    }
+                ]
+            )
+            out = td / "out.xlsx"
+            sink = []
+            xlsx_generate.generate(
+                loaded.profile, loaded.shell_path, grid, out, findings=sink
+            )
+            with zipfile.ZipFile(out) as z:
+                chart_parts = [
+                    n
+                    for n in z.namelist()
+                    if "/charts/chart" in n and n.endswith(".xml")
+                ]
+            self.assertTrue(chart_parts, "native chart not authored into the template")
+            self.assertFalse([f for f in sink if f.check == "block_degraded"])
+            report = run_qa(
+                out,
+                loaded.profile,
+                shell=loaded.shell_path,
+                extra_findings=list(sink),
+                qa="fast",
+            )
+            self.assertNotEqual(
+                report.verdict,
+                "failed",
+                [f.message for f in report.findings if f.severity == "ERROR"],
+            )
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

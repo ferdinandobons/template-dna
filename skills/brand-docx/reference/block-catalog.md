@@ -45,7 +45,11 @@ The 16 block `type` values (the keys of `BLOCK_TYPES`):
   never silent), an empty/all-non-numeric chart degrades loudly, and a multi-series
   pie/doughnut surfaces a truncation WARNING (only its first series renders). The
   docx chart uses inline cached data (no embedded workbook), so generation stays
-  byte-idempotent. On **xlsx** a native chart writer is still deferred.
+  byte-idempotent. On **xlsx** charts are native too but authored differently: the
+  grid model is range-based, so a chart is a `GridDocument.charts` entry
+  (`{sheet?, type, title?, anchor, data, categories?, data_titles?}`) that
+  REFERENCES the workbook's own cell ranges via openpyxl - the data lives in the
+  sheet, which is the spreadsheet's strength.
 - **`smartart`** - a diagram. Carries `diagram` (default `"process"`) and `nodes`
   (`[{text, children}]`). Resolves to `smartart.{diagram}` (clone-fill or rendered
   image).

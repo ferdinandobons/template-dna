@@ -253,6 +253,7 @@ def _capabilities() -> dict:
         "generates_from_shell": True,
         "emits_region_geometry": True,
         "comprehension_demo_classification": True,
+        "native_charts": True,
     }
 
 

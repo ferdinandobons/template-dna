@@ -15,6 +15,13 @@ from typing import Any
 class GridDocument:
     cells: dict[str, Any] = field(default_factory=dict)
     regions: dict[str, list[list[Any]]] = field(default_factory=dict)
+    # Native charts to author over the workbook's OWN cell data. Each spec is a
+    # plain dict describing a chart that REFERENCES existing cell ranges (the xlsx
+    # peer of the docx/pptx inline-data chart - here the data lives in the sheet, the
+    # chart's strength): ``{"sheet"?, "type", "title"?, "anchor", "data",
+    # "categories"?, "data_titles"?}``. ``data``/``categories`` are A1 ranges on
+    # ``sheet`` (default: the active sheet); ``anchor`` is the top-left cell.
+    charts: list[dict] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GridDocument":
@@ -23,6 +30,7 @@ class GridDocument:
         return cls(
             cells=dict(data.get("cells") or {}),
             regions=dict(data.get("regions") or {}),
+            charts=[dict(c) for c in (data.get("charts") or []) if isinstance(c, dict)],
         )
 
 

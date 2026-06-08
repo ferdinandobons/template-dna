@@ -17,7 +17,13 @@ All notable changes to BrandDocs are documented in this file.
   cached data (no embedded workbook) and is the single data gate both formats use;
   the pptx data workbook's wall-clock timestamps are normalized by
   `repack_fixed_timestamps` (now recursive over nested OOXML packages), so generation
-  stays byte-idempotent on both. The xlsx native chart writer remains deferred.
+  stays byte-idempotent on both.
+- Excel charts complete the set: a `GridDocument.charts` entry (`{sheet?, type,
+  title?, anchor, data, categories?, data_titles?}`) is authored as a NATIVE
+  openpyxl chart that REFERENCES the workbook's own cell ranges (the grid model is
+  range-based, so the data lives in the sheet). Same type map / unknown-type INFO
+  fallback / loud degrade contract; the chart inherits the workbook theme, and
+  generation stays byte-idempotent. All three formats now author native charts.
 - Word: the deterministic cover fill (comprehension absent) now also places
   the authored **subtitle** into the cover slot identified by its resolved
   `cover.subtitle` style - correct-by-style, never guessed from the template's

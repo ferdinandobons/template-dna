@@ -67,16 +67,31 @@ Check what's present at any time with `python scripts/brandkit/cli.py doctor`. P
 
 ## Installation
 
-**Claude Code plugin (recommended)** loads all three skills plus the shared engine together:
+The three skills share one Python engine (`scripts/brandkit/`), so install the **whole repository** — copying a single skill folder on its own won't work. After either install below, set up the [prerequisites](#prerequisites) so the engine can run, then verify with `python scripts/brandkit/cli.py doctor`.
+
+### Claude Code
+
+The plugin loads all three skills plus the shared engine together:
 
 ```text
 /plugin marketplace add ferdinandobons/brand-docs
 /plugin install brand-docs@brand-docs
 ```
 
-Then install the [prerequisites](#prerequisites) above so the engine can run.
+### Codex (and other agents)
 
-> The three skills share one Python engine (`scripts/brandkit/`), so install the **whole repository**: copying a single skill folder on its own won't work. Git submodule, Codex clone, and updating instructions are in **[documentation/INSTALLATION.md](documentation/INSTALLATION.md)**.
+Clone the repo and symlink the three skills into your Codex skills directory, so each skill's engine in `scripts/brandkit/` travels with it:
+
+```bash
+git clone https://github.com/ferdinandobons/brand-docs.git ~/.codex/brand-docs
+cd ~/.codex/brand-docs && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+mkdir -p ~/.codex/skills
+for s in brand-docx brand-pptx brand-xlsx; do ln -s ~/.codex/brand-docs/skills/$s ~/.codex/skills/$s; done
+```
+
+Restart or reload the agent if the skills don't appear immediately.
+
+> Git-submodule install and updating instructions are in **[documentation/INSTALLATION.md](documentation/INSTALLATION.md)**.
 
 ---
 

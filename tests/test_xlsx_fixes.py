@@ -139,5 +139,142 @@ class MergedBannerRegionEndToEnd(unittest.TestCase):
             self.assertTrue(all(f.severity == "WARNING" for f in degraded))
 
 
+class NativeXlsxChartTest(unittest.TestCase):
+    """A GridDocument.charts spec becomes a NATIVE openpyxl chart that REFERENCES
+    the workbook's own cell data (the xlsx peer of the inline-data docx/pptx chart):
+    valid chart part, byte-idempotent, theme-colored, unknown-type fallback, and a
+    missing-data spec degrades loudly (never a crash)."""
+
+    def _shell(self, td: Path) -> Path:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        ws["A1"], ws["B1"], ws["C1"] = "Q", "A", "B"
+        for i, (q, a, b) in enumerate(
+            [("Q1", 12, 7), ("Q2", 15, 9), ("Q3", 14, 11), ("Q4", 19, 13)], start=2
+        ):
+            ws[f"A{i}"], ws[f"B{i}"], ws[f"C{i}"] = q, a, b
+        wb.defined_names.add(DefinedName("hdr", attr_text="Data!$A$1"))
+        shell = td / "shell.xlsx"
+        wb.save(shell)
+        return shell
+
+    def _extract(self, td: Path, shell: Path):
+        old = os.getcwd()
+        os.chdir(td)
+        try:
+            xlsx_extract.extract(shell, "syn", scope="project", cwd=td)
+            return store.load_profile("syn", "project")
+        finally:
+            os.chdir(old)
+
+    def _chart_parts(self, path: Path) -> dict:
+        import zipfile
+
+        with zipfile.ZipFile(path) as z:
+            return {
+                n: z.read(n).decode("utf-8", "ignore")
+                for n in z.namelist()
+                if "/charts/chart" in n and n.endswith(".xml")
+            }
+
+    def test_chart_specs_become_native_charts(self) -> None:
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._shell(td))
+            grid = GridDocument(
+                charts=[
+                    {
+                        "sheet": "Data",
+                        "type": "bar",
+                        "title": "Ricavi",
+                        "anchor": "E1",
+                        "data": "B1:C5",
+                        "categories": "A2:A5",
+                    },
+                    {
+                        "sheet": "Data",
+                        "type": "pie",
+                        "title": "Quota",
+                        "anchor": "E18",
+                        "data": "B2:B5",
+                        "categories": "A2:A5",
+                        "data_titles": False,
+                    },
+                ]
+            )
+            out = td / "out.xlsx"
+            sink: list[Finding] = []
+            xlsx_generate.generate(
+                loaded.profile, loaded.shell_path, grid, out, findings=sink
+            )
+            parts = self._chart_parts(out)
+            self.assertEqual(len(parts), 2, "two native chart parts expected")
+            joined = "".join(parts.values())
+            # openpyxl serializes the chart with the chart namespace as DEFAULT (no
+            # ``c:`` prefix), so the elements are ``<barChart>`` / ``<pieChart>``.
+            self.assertIn("<barChart", joined)
+            self.assertIn("<pieChart", joined)
+            # references the workbook's own cell data (sheet-qualified A1 ranges)
+            self.assertIn("'Data'!", joined)
+            self.assertIn("$B$2:$B$5", joined)
+            # No literal series fill color is written -> the chart inherits the theme.
+            self.assertNotIn("srgbClr", joined)
+            self.assertFalse([f for f in sink if f.check == "block_degraded"])
+
+    def test_chart_generation_is_byte_idempotent(self) -> None:
+        # openpyxl serializes the chart/drawing parts; repack_fixed_timestamps pins
+        # the ZIP + core.xml so two identical generations are byte-identical.
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._shell(td))
+            grid = GridDocument(
+                charts=[
+                    {
+                        "sheet": "Data",
+                        "type": "bar",
+                        "anchor": "E1",
+                        "data": "B1:C5",
+                        "categories": "A2:A5",
+                    }
+                ]
+            )
+            a, b = td / "a.xlsx", td / "b.xlsx"
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, a)
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, b)
+            self.assertEqual(
+                a.read_bytes(), b.read_bytes(), "native-chart xlsx not byte-idempotent"
+            )
+
+    def test_unknown_type_fallback_and_missing_data_degrades(self) -> None:
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._shell(td))
+            grid = GridDocument(
+                charts=[
+                    {  # unknown type -> fallback to a column chart (still authored)
+                        "sheet": "Data",
+                        "type": "nonsense",
+                        "anchor": "E1",
+                        "data": "B1:C5",
+                        "categories": "A2:A5",
+                    },
+                    {
+                        "sheet": "Data",
+                        "type": "bar",
+                        "anchor": "E18",
+                    },  # no data -> skip
+                ]
+            )
+            out = td / "out.xlsx"
+            sink: list[Finding] = []
+            xlsx_generate.generate(
+                loaded.profile, loaded.shell_path, grid, out, findings=sink
+            )
+            self.assertEqual(len(self._chart_parts(out)), 1)  # only the fallback chart
+            self.assertTrue(any(f.check == "chart_type_fallback" for f in sink))
+            self.assertTrue(any(f.check == "block_degraded" for f in sink))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

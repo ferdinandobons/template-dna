@@ -22,6 +22,14 @@ from typing import Optional
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
+from openpyxl.chart import (
+    AreaChart,
+    BarChart,
+    DoughnutChart,
+    LineChart,
+    PieChart,
+    Reference,
+)
 from openpyxl.utils.cell import range_boundaries
 
 from brandkit.grid.model import GridDocument
@@ -107,6 +115,12 @@ def generate(
                     where=name,
                 )
 
+    # Native charts over the workbook's OWN cell data (after the fills, so the
+    # referenced ranges carry the new values). The chart inherits the workbook
+    # theme's accent colors - on-brand by construction, no literal color written.
+    for spec in grid.charts:
+        _write_chart(wb, spec, sink)
+
     # Comprehension-steered reconciliation (no-op when comprehension is absent):
     # CLEAR cover anchors / demo sample-data regions the model ruled destructive,
     # with the destructive floor corroborating each removal.
@@ -154,6 +168,109 @@ def generate(
     # code-literal date is invented.
     repack_fixed_timestamps(out, pin_modified_from_created=True)
     return out
+
+
+def _new_xlsx_chart(chart_type: str | None):
+    """Map an IR ``chart_type`` to a fresh openpyxl chart object, or None if unknown.
+
+    ``bar`` is the common business vertical bar (a COLUMN chart); ``barh`` is the
+    true horizontal bar. No explicit series color is set, so the chart inherits the
+    workbook theme's accent palette."""
+    kind = (chart_type or "bar").lower()
+    if kind in ("bar", "column"):
+        chart = BarChart()
+        chart.type = "col"
+        return chart
+    if kind == "barh":
+        chart = BarChart()
+        chart.type = "bar"
+        return chart
+    if kind == "line":
+        return LineChart()
+    if kind == "area":
+        return AreaChart()
+    if kind == "pie":
+        return PieChart()
+    if kind == "doughnut":
+        return DoughnutChart()
+    return None
+
+
+def _write_chart(wb, spec: dict, sink: list) -> None:
+    """Author a NATIVE xlsx chart that REFERENCES cell data (the xlsx peer of the
+    docx/pptx inline-data chart - here the data lives in the sheet, the chart's
+    strength). The chart inherits the workbook theme's accent colors (on-brand by
+    construction; no literal color). A spec missing its anchor/data, naming a sheet
+    not in the workbook, or carrying a malformed range, degrades to a loud
+    ``block_degraded`` WARNING - never a crash. An unknown ``type`` falls back to a
+    clustered column chart (INFO)."""
+    anchor = spec.get("anchor")
+    data_ref = spec.get("data")
+    if not anchor or not data_ref:
+        sink.append(
+            Finding(
+                check="block_degraded",
+                severity=schema.Severity.WARNING.value,
+                message="'chart' spec missing anchor/data; skipped",
+            )
+        )
+        return
+    sheet = spec.get("sheet")
+    if sheet and sheet not in wb.sheetnames:
+        sink.append(
+            Finding(
+                check="block_degraded",
+                severity=schema.Severity.WARNING.value,
+                message=f"'chart' references sheet {sheet!r} not in the workbook; skipped",
+            )
+        )
+        return
+    ws = wb[sheet] if sheet else wb.active
+
+    chart = _new_xlsx_chart(spec.get("type"))
+    if chart is None:
+        chart = BarChart()
+        chart.type = "col"
+        sink.append(
+            Finding(
+                check="chart_type_fallback",
+                severity=schema.Severity.INFO.value,
+                message=f"chart_type {spec.get('type')!r} unknown; "
+                "rendered as a clustered column chart",
+            )
+        )
+
+    try:
+        d_min_c, d_min_r, d_max_c, d_max_r = range_boundaries(str(data_ref))
+        chart.add_data(
+            Reference(
+                ws, min_col=d_min_c, min_row=d_min_r, max_col=d_max_c, max_row=d_max_r
+            ),
+            titles_from_data=bool(spec.get("data_titles", True)),
+        )
+        cats = spec.get("categories")
+        if cats:
+            c_min_c, c_min_r, c_max_c, c_max_r = range_boundaries(str(cats))
+            chart.set_categories(
+                Reference(
+                    ws,
+                    min_col=c_min_c,
+                    min_row=c_min_r,
+                    max_col=c_max_c,
+                    max_row=c_max_r,
+                )
+            )
+        if spec.get("title"):
+            chart.title = str(spec["title"])
+        ws.add_chart(chart, str(anchor))
+    except Exception as exc:
+        sink.append(
+            Finding(
+                check="block_degraded",
+                severity=schema.Severity.WARNING.value,
+                message=f"'chart' not placed ({exc}); skipped",
+            )
+        )
 
 
 def _name_to_role(profile: dict) -> dict[str, str]:
