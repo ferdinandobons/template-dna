@@ -4,6 +4,54 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-09
+
+Visual QA works by default, a whole-project code + quality review (multi-agent,
+adversarially verified) hardens security/correctness/determinism, and the docs are
+re-synced to the shipped engine. Brand Profiles from 0.1.x-0.5.0 keep working
+unchanged.
+
+### Added
+
+- **Visual QA runs by default and installs in one step.** The renderer probe is now
+  FUNCTIONAL-first: a LibreOffice that actually renders is usable even if its macOS
+  code signature was knocked loose by an update/quarantine removal (no re-sign
+  needed), so the visual gate is no longer falsely disabled. `scripts/setup_visual_qa.sh`
+  auto-detects the platform package manager and installs LibreOffice + Poppler
+  (+ optional Tesseract); the README/INSTALLATION reframe visual QA as a standard,
+  on-by-default part of the QA step.
+- An aggregate OCR time budget so a many-page document cannot turn a deep/strict
+  gate into an `N x timeout` hang.
+
+### Fixed
+
+- **Security - Excel formula injection:** author content starting with `=` became a
+  LIVE formula (`=WEBSERVICE`/`=HYPERLINK`/DDE) in the generated workbook, breaking
+  the "formulas live only in the shell" invariant. It is now neutralized to a TEXT
+  cell (verbatim, never executed) and surfaced; the QA gate also fails closed on any
+  output formula the shell did not have.
+- **Security - hyperlink scheme allowlist:** docx/pptx now refuse `file:`/
+  `javascript:`/`data:`/`smb:` link targets (the text is kept), so untrusted content
+  cannot wire a hostile link into an on-brand file.
+- **Robustness:** component/section expansion has a node-count budget (runaway
+  fan-out fails loud, never hangs/OOMs); a pathologically deep list IID raises the
+  contracted `IIDParseError` instead of `RecursionError`; the OCR step tolerates
+  non-UTF-8 tesseract output instead of crashing the whole run.
+- **Determinism:** xlsx generation is byte-idempotent even when the shell's
+  `core.xml` lacks `dcterms:created` (openpyxl would otherwise fabricate a
+  wall-clock one); a number-format mask is no longer applied to a preserved-formula
+  / merged cell; `profile.json` is written with sorted keys.
+- **Number-format classification:** elapsed-time masks (`[h]:mm`) classify as time;
+  accounting masks with bracketed currency + padding idioms classify as accounting.
+- **Visual QA:** the Quick Look fallback accepts only the expected thumbnail name
+  (never stages a stale/unrelated PNG as a bogus render).
+
+### Changed
+
+- Removed verified-dead helpers and corrected stale docstrings/docs: the docx TOC
+  and the pptx charts/SmartArt/KPI/images are native now (not "deferred"), and
+  `number_format`/`named_range` are first-class resolver types.
+
 ## [0.5.0] - 2026-06-08
 
 Completes the block-type matrix: Word now renders **every** block type natively
@@ -235,6 +283,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.6.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.5.0
 [0.4.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.3.0
