@@ -513,17 +513,18 @@ def _xlsx_formula_map(path) -> dict[str, str]:
     """Map ``Sheet!Coord`` -> formula string for every formula cell in a workbook.
 
     Reads the live file (``data_only=False``) so the comparison reflects what is
-    actually on disk, not a possibly-stale catalog snapshot. Only string cells
-    starting with ``=`` are formulas; iterating ``_cells`` keeps this O(populated)
-    on sparse corporate models.
+    actually on disk, not a possibly-stale catalog snapshot. A formula is identified
+    by ``data_type == "f"`` (authoritative) - NOT by a leading ``=`` in the string,
+    so a cell deliberately neutralized to TEXT (an author ``=...`` value written as a
+    string literal) is correctly NOT counted as a formula. Iterating ``_cells`` keeps
+    this O(populated) on sparse corporate models.
     """
     out: dict[str, str] = {}
     wb = load_workbook(path, data_only=False)
     for ws in wb.worksheets:
         for cell in ws._cells.values():
-            value = cell.value
-            if isinstance(value, str) and value.startswith("="):
-                out[f"{ws.title}!{cell.coordinate}"] = value
+            if cell.data_type == "f" and isinstance(cell.value, str):
+                out[f"{ws.title}!{cell.coordinate}"] = cell.value
     return out
 
 
@@ -580,6 +581,21 @@ def check_formula_preservation(shell, output, profile: dict) -> list[Finding]:
                     location=address,
                 )
             )
+    # The engine NEVER authors formulas: any formula in the OUTPUT that the shell did
+    # not have was introduced by author content (a string starting with '='), which is
+    # both an invariant break and a formula-injection risk. Fail closed even if the
+    # write-path neutralization ever regresses.
+    for address in sorted(set(output_formulas) - set(shell_formulas)):
+        findings.append(
+            Finding(
+                "formula_preservation",
+                schema.Severity.ERROR.value,
+                f"output has a formula at {address} ({output_formulas[address]!r}) that "
+                "the shell did not: the engine never authors formulas (author '='-led "
+                "content must be neutralized to text)",
+                location=address,
+            )
+        )
     return findings
 
 

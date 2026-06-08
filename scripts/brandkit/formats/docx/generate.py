@@ -15,6 +15,7 @@ from docx.oxml.ns import qn
 from docx.shared import Emu
 
 from brandkit.common import text as textutil
+from brandkit.common.links import is_safe_link_url
 from brandkit.formats.docx import cover, structure
 from brandkit.formats.docx.styles import lookup_style
 from brandkit.ir import components
@@ -288,7 +289,14 @@ def _add_hyperlink(para, url: str, text: str, r: dict) -> None:
     The link target is the author's URL (content, not brand), wired through a
     package relationship. The visible run keeps the author's inline emphasis; we do
     not inject a literal ``Hyperlink`` character style or color (brand guarantee).
+
+    An UNSAFE scheme (``file:``/``smb:``/``javascript:``/``data:``/...) is neutralized:
+    the author's TEXT is kept (emphasis preserved) but the dangerous target is not
+    wired, so untrusted content cannot smuggle a hostile link into the document.
     """
+    if not is_safe_link_url(url):
+        _apply_run_toggles(para.add_run(text), r)
+        return
     r_id = para.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
     hyperlink = OxmlElement("w:hyperlink")
     hyperlink.set(qn("r:id"), r_id)

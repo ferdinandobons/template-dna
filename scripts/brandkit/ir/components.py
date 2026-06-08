@@ -49,12 +49,21 @@ def expand_components(
     """
     components = profile.get("components") or {}
     sections = profile.get("sections") or {}
-    document.blocks = _expand_blocks(document.blocks, components, sections, _depth=0)
+    document.blocks = _expand_blocks(
+        document.blocks, components, sections, _depth=0, _emitted=[0]
+    )
     return document
 
 
-def _expand_blocks(blocks, components, sections, *, _depth: int):
-    if _depth > 16:
+# Depth bounds a self-/mutually-referential registry (a cycle); the node budget
+# bounds runaway FAN-OUT (a tree of refs that stays within the depth cap can still
+# expand to astronomically many primitives) - both fail LOUD, never hang/OOM.
+_MAX_DEPTH = 16
+_MAX_EXPANDED_BLOCKS = 50_000
+
+
+def _expand_blocks(blocks, components, sections, *, _depth: int, _emitted: list[int]):
+    if _depth > _MAX_DEPTH:
         raise ComponentExpansionError(
             "component/section expansion exceeded max depth (cycle?)"
         )
@@ -70,6 +79,7 @@ def _expand_blocks(blocks, components, sections, *, _depth: int):
                     sections,
                     _depth,
                     block.slots,
+                    _emitted,
                 )
             )
         elif isinstance(block, Section):
@@ -82,14 +92,21 @@ def _expand_blocks(blocks, components, sections, *, _depth: int):
                     sections,
                     _depth,
                     block.slots,
+                    _emitted,
                 )
             )
         else:
+            _emitted[0] += 1
+            if _emitted[0] > _MAX_EXPANDED_BLOCKS:
+                raise ComponentExpansionError(
+                    f"component/section expansion exceeded {_MAX_EXPANDED_BLOCKS} "
+                    "primitive blocks (runaway fan-out?)"
+                )
             out.append(block)
     return out
 
 
-def _expand_ref(ref, registry, kind, components, sections, depth, slots=None):
+def _expand_ref(ref, registry, kind, components, sections, depth, slots, _emitted):
     definition = registry.get(ref)
     if definition is None:
         raise ComponentExpansionError(
@@ -106,7 +123,9 @@ def _expand_ref(ref, registry, kind, components, sections, depth, slots=None):
     # output as a literal ``{{...}}``.
     raw_blocks = [_apply_slots(b, slots or {}) for b in raw_blocks]
     sub = [block_from_dict(b) for b in raw_blocks]
-    return _expand_blocks(sub, components, sections, _depth=depth + 1)
+    return _expand_blocks(
+        sub, components, sections, _depth=depth + 1, _emitted=_emitted
+    )
 
 
 def _apply_slots(value, slots, _depth: int = 0):

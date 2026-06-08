@@ -60,3 +60,27 @@ def test_table_multi_run_column_header_survives_round_trip() -> None:
     again = ir.Table.from_dict(table.to_dict())
     assert textutil.runs_to_text(again.columns[0]) == "Sales (M)"
     assert again.columns[0][1].get("b") is True
+
+
+def test_deeply_nested_list_raises_iidparse_error_not_recursion():
+    # A pathologically deep ``items`` chain must raise the contracted IIDParseError,
+    # never an uncaught RecursionError (fail-closed on hostile/runaway input).
+    node = {"text": "leaf"}
+    for _ in range(200):
+        node = {"text": "n", "items": [node]}
+    raised = None
+    try:
+        ir.ListItem.from_dict(node)
+    except ir.IIDParseError:
+        raised = "iidparse"
+    except RecursionError:
+        raised = "recursion"
+    assert raised == "iidparse", f"expected IIDParseError, got {raised}"
+
+
+def test_modest_list_nesting_still_parses():
+    node = {"text": "leaf"}
+    for _ in range(10):
+        node = {"text": "n", "items": [node]}
+    item = ir.ListItem.from_dict(node)
+    assert item.items  # parsed fine within the cap

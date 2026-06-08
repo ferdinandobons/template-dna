@@ -120,9 +120,10 @@ producing a clean branded document.
 
 The most valuable next reliability improvements are:
 
-1. **Native PPTX object authoring**: continue beyond native tables into real
-   PowerPoint charts/images/SmartArt instead of down-rendering them to text, while
-   keeping component-survival warnings.
+1. **Deeper PPTX/XLSX fidelity**: native object authoring already covers tables
+   (with merges), charts, SmartArt, KPIs and images on-brand; the open work is
+   richer placeholder/overflow handling, multi-master selection, and closing the
+   remaining fidelity gap to the docx reference vertical.
 2. **Richer visual analysis**: build on the PyMuPDF fallback with optional
    `numpy`/`opencv-python` or `scikit-image` for overlap, clipping, and
    large-empty-region detection.

@@ -2084,5 +2084,29 @@ class PptxTableMergeTest(unittest.TestCase):
             self.assertEqual(tbl.cell(2, 1).text, "y")
 
 
+class FragmentFanoutBudgetTest(unittest.TestCase):
+    """Runaway component/section FAN-OUT (within the depth cap) fails LOUD via the
+    node-count budget instead of hanging / OOM-ing the generator."""
+
+    def test_runaway_fanout_raises_component_expansion_error(self) -> None:
+        profile = schema.build_envelope("pptx", {"name": "deck"})
+        # A leaf of 200 primitives, referenced 300x -> 60_000 primitives > the cap.
+        profile["components"] = {
+            "leaf": {"blocks": [{"type": "paragraph", "text": "x"}] * 200}
+        }
+        idoc = parse_idoc({"blocks": [{"type": "component", "ref": "leaf"}] * 300})
+        with self.assertRaises(ir_components.ComponentExpansionError):
+            ir_components.expand_components(idoc, profile)
+
+    def test_normal_fanout_within_budget_expands(self) -> None:
+        profile = schema.build_envelope("pptx", {"name": "deck"})
+        profile["components"] = {
+            "leaf": {"blocks": [{"type": "paragraph", "text": "x"}] * 5}
+        }
+        idoc = parse_idoc({"blocks": [{"type": "component", "ref": "leaf"}] * 5})
+        expanded = ir_components.expand_components(idoc, profile)
+        self.assertEqual(len(expanded.blocks), 25)  # 5 x 5, well under the cap
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

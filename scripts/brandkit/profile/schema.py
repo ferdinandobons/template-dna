@@ -8,10 +8,10 @@ cohesion conflicts between dimensions; this module *is* that freeze:
 - The discriminator key is ``kind`` (``docx`` | ``pptx`` | ``xlsx``), never
   ``doc_type``. See :class:`Kind`.
 - The role registry key is ``roles``, never ``bindings``.
-- Resolver types are ``named_style`` | ``placeholder`` | ``cell_style``
-  (plus the maturity-staged ``number_format`` | ``named_range`` |
-  ``chart_template``). The redundant ``layout_placeholder`` is dropped. See
-  :class:`ResolverType`.
+- Resolver types are ``named_style`` | ``placeholder`` | ``cell_style`` |
+  ``named_range`` | ``number_format`` (all first-class), plus the still
+  maturity-staged ``chart_template``. The redundant ``layout_placeholder`` is
+  dropped. See :class:`ResolverType`.
 - ``schema_version`` is semver; this module pins :data:`SCHEMA_VERSION`.
 - The shell always lives at ``template/shell.<ext>``.
 - Role status is ``robust`` | ``best_effort`` | ``stub`` (:class:`Status`);
@@ -73,10 +73,11 @@ KIND_EXTENSION: dict[str, str] = {
 class ResolverType(str, Enum):
     """The concrete kinds a role can resolve to.
 
-    Only ``NAMED_STYLE`` (docx), ``PLACEHOLDER`` (pptx) and ``CELL_STYLE``
-    (xlsx) are first-class in M1. ``NUMBER_FORMAT`` / ``NAMED_RANGE`` (xlsx) and
-    ``CHART_TEMPLATE`` are staged maturity types carried by the schema from day
-    one (status ``stub``/``best_effort``) per §8.
+    ``NAMED_STYLE`` (docx), ``PLACEHOLDER`` (pptx), ``CELL_STYLE`` /
+    ``NAMED_RANGE`` / ``NUMBER_FORMAT`` (xlsx) are all first-class and applied by
+    the generators. ``CHART_TEMPLATE`` remains a staged maturity type carried by
+    the schema (status ``stub``/``best_effort``); native charts are authored
+    directly today rather than via a resolver.
     """
 
     NAMED_STYLE = "named_style"

@@ -389,7 +389,14 @@ def number_format_family(code: Optional[str]) -> Optional[str]:
         g in c_nobrackets for g in _CURRENCY_GLYPHS
     )
     has_date = ("y" in bare_low) or ("d" in bare_low) or ("mmm" in bare_low)
-    has_time = ("h" in bare_low) or ("s" in bare_low) or ("a/p" in low)
+    # Elapsed-time markers ([h], [mm], [ss]) live INSIDE brackets that the bare-scan
+    # strips, so detect them on the original mask too (else e.g. ``[h]:mm`` -> None).
+    has_time = (
+        ("h" in bare_low)
+        or ("s" in bare_low)
+        or ("a/p" in low)
+        or bool(re.search(r"\[(h+|m+|s+)\]", low))
+    )
     has_sci = bool(re.search(r"e[+\-]", bare_low))
     has_text = "@" in bare
     is_numeric = any(ch in bare for ch in "0#?")
@@ -400,8 +407,12 @@ def number_format_family(code: Optional[str]) -> Optional[str]:
     if has_text and not is_numeric:
         return "text"
     if has_currency:
-        # Accounting masks align with parentheses / underscore padding.
-        return "accounting" if ("_(" in c or "_)" in c or "(" in bare) else "currency"
+        # Accounting masks align columns with parenthesis or underscore/asterisk
+        # padding (Excel's built-in Accounting idioms: ``_(``/``_)``, ``_-``, ``* ``).
+        is_accounting = ("(" in bare) or any(
+            tok in c for tok in ("_(", "_)", "_-", "* ")
+        )
+        return "accounting" if is_accounting else "currency"
     if has_date and has_time:
         return "datetime"
     if has_date:

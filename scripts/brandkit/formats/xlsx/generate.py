@@ -17,6 +17,8 @@ deterministic path fills exactly the named cells/regions the grid names.
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -91,13 +93,16 @@ def generate(
         sheet, coord = target["sheet"], target["range"]
         min_col, min_row, _, _ = range_boundaries(coord)
         cell = wb[sheet].cell(row=min_row, column=min_col)
-        _fill_cell(cell, value, sink=sink, where=name)
+        wrote = _fill_cell(cell, value, sink=sink, where=name)
         _reassert_cover_style(cell, cover_style_for_name.get(name))
         # Apply the resolved number-format intent LAST so it wins over any mask the
-        # re-asserted cell style carries (the explicit semantic intent is authoritative).
-        mask = _resolve_number_mask(resolver, grid.formats.get(name), name, sink)
-        if mask and not isinstance(cell, MergedCell):
-            cell.number_format = mask
+        # re-asserted cell style carries (the explicit semantic intent is authoritative)
+        # - but ONLY when a value was actually written, so a preserved-formula / merged
+        # cell never has its own format silently clobbered.
+        if wrote:
+            mask = _resolve_number_mask(resolver, grid.formats.get(name), name, sink)
+            if mask:
+                cell.number_format = mask
 
     # Fill multi-cell named regions (bounds-guarded; never overruns the range).
     # Same formula guard as the single-cell loop: a region named over a block that
@@ -117,8 +122,10 @@ def generate(
         for r_idx, row in enumerate(values):
             for c_idx, value in enumerate(row):
                 cell = ws.cell(row=min_row + r_idx, column=min_col + c_idx)
-                _fill_cell(cell, value, sink=sink, where=name)
-                if region_mask and not isinstance(cell, MergedCell):
+                wrote = _fill_cell(cell, value, sink=sink, where=name)
+                # Only format cells we actually wrote: never clobber a preserved
+                # formula cell's (or a merged slave's) own format.
+                if wrote and region_mask:
                     cell.number_format = region_mask
 
     # Native charts over the workbook's OWN cell data (after the fills, so the
@@ -164,6 +171,14 @@ def generate(
 
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Byte-idempotency precondition: when the shell's core.xml carries no
+    # dcterms:created, openpyxl FABRICATES a wall-clock created (and stamps it into
+    # modified) at load, which two generations straddling a 2s boundary would differ
+    # on - and pinning modified-from-created cannot fix it because created is itself
+    # wall-clock. Pin a fixed created in that case so the output is deterministic.
+    # (When the shell HAS a created, openpyxl preserved it, so leave it untouched.)
+    if _shell_created_iso(shell_path) is None:
+        wb.properties.created = datetime(1980, 1, 1, tzinfo=timezone.utc)
     wb.save(out)
     # Byte-idempotency (X7): openpyxl's writer stamps the current wall-clock time
     # into every ZIP entry header AND into ``docProps/core.xml`` ``dcterms:modified``
@@ -474,6 +489,26 @@ def _holds_formula(cell) -> bool:
     return isinstance(cell.value, str) and cell.value.startswith("=")
 
 
+def _shell_created_iso(shell_path) -> str | None:
+    """Return the shell core.xml ``dcterms:created`` ISO string, or ``None`` if absent.
+
+    Used only to decide whether openpyxl will fabricate a wall-clock ``created`` on
+    save (it does when the shell has none) so the xlsx generator can pin a
+    deterministic value and stay byte-idempotent. Any read error is treated as
+    "absent" (the conservative, determinism-preserving choice).
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(shell_path) as zf:
+            core = zf.read("docProps/core.xml").decode("utf-8", errors="replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    match = re.search(r"<dcterms:created[^>]*>([^<]*)</dcterms:created>", core)
+    value = match.group(1).strip() if match else ""
+    return value or None
+
+
 def _resolve_number_mask(
     resolver: ProfileResolver, family: Optional[str], where: str, sink: list[Finding]
 ) -> Optional[str]:
@@ -506,25 +541,32 @@ def _resolve_number_mask(
 
 def _fill_cell(
     cell, value, *, sink: Optional[list[Finding]] = None, where: str | None = None
-) -> None:
+) -> bool:
     """Write ``value`` into ``cell`` unless that would destroy or escape shell state.
 
-    Skips the write when ``value`` is ``None`` (a sparse / ragged grid row must not
-    blank a preserved cell), when the target is a merged-range SLAVE cell (only a
-    merge's top-left anchor is writable in openpyxl; writing a slave raises
-    ``AttributeError`` - a named region whose first row straddles a merged banner
-    routes a fill onto a slave), or when the target already holds a formula
-    (preserving the shell's load-bearing formula verbatim). Every other value -
-    including the empty string the grid may use for an intentionally cleared cell -
-    is written through.
+    Returns ``True`` iff a value was actually written (so the caller knows whether a
+    number-format mask may be applied without clobbering a preserved/merged cell).
+
+    Skips the write (returns ``False``) when ``value`` is ``None`` (a sparse / ragged
+    grid row must not blank a preserved cell), when the target is a merged-range SLAVE
+    cell (only a merge's top-left anchor is writable in openpyxl; writing a slave
+    raises ``AttributeError``), or when the target already holds a formula (preserving
+    the shell's load-bearing formula verbatim). Every other value - including the
+    empty string the grid may use for an intentionally cleared cell - is written.
+
+    The engine NEVER authors formulas (they live only in the shell). An author value
+    that is a string starting with ``=`` would become a live formula in openpyxl
+    (``data_type 'f'``), breaking that invariant and shipping a formula-injection
+    payload (``=WEBSERVICE``/``=HYPERLINK``/DDE) in an otherwise on-brand workbook. It
+    is neutralized to a TEXT cell (written verbatim, never executed) and surfaced
+    loudly, so the content is visible and the neutralization is auditable.
 
     A dropped non-``None`` value on a merged slave is surfaced as a
     ``block_degraded`` WARNING on ``sink`` (the merged banner keeps its shell value)
-    so the skip is visible in QA rather than a silent loss, honoring the engine's
-    "never drop content silently" invariant.
+    so the skip is visible in QA rather than a silent loss.
     """
     if value is None:
-        return
+        return False
     if isinstance(cell, MergedCell):
         if sink is not None:
             loc = f"{where} ({cell.coordinate})" if where else cell.coordinate
@@ -540,10 +582,31 @@ def _fill_cell(
                     location=loc,
                 )
             )
-        return
+        return False
     if _holds_formula(cell):
-        return
+        return False
+    if isinstance(value, str) and value.startswith("="):
+        # Neutralize: write verbatim but force a string cell so Excel never executes
+        # it as a formula (the engine does not author formulas).
+        cell.value = value
+        cell.data_type = "s"
+        if sink is not None:
+            loc = f"{where} ({cell.coordinate})" if where else cell.coordinate
+            sink.append(
+                Finding(
+                    check="formula_injection_neutralized",
+                    severity=schema.Severity.WARNING.value,
+                    message=(
+                        f"author value starting with '=' written as TEXT at {loc}: the "
+                        "engine never authors formulas, and a live formula here would "
+                        "be a formula-injection risk in the shipped workbook"
+                    ),
+                    location=loc,
+                )
+            )
+        return True
     cell.value = value
+    return True
 
 
 def _clear_region(wb, target: dict, *, skip_rows: int = 0) -> bool:

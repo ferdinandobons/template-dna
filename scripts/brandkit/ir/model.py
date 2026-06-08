@@ -130,6 +130,11 @@ class Paragraph(Block):
         )
 
 
+# Bounds list-item nesting so a pathologically deep ``items`` chain raises the
+# contracted IIDParseError instead of an uncaught RecursionError.
+_MAX_LIST_NESTING = 64
+
+
 @dataclass
 class ListItem:
     """One item in a :class:`ListBlock` (may nest sub-items)."""
@@ -145,12 +150,21 @@ class ListItem:
         return out
 
     @classmethod
-    def from_dict(cls, data: dict | str, *, level: int = 0) -> "ListItem":
+    def from_dict(
+        cls, data: dict | str, *, level: int = 0, _depth: int = 0
+    ) -> "ListItem":
+        if _depth > _MAX_LIST_NESTING:
+            raise IIDParseError(
+                f"list item nesting exceeded max depth ({_MAX_LIST_NESTING})"
+            )
         if isinstance(data, str):
             return cls(runs=textutil.plain_run(data), level=level)
         runs = textutil.normalize_runs(data.get("runs"), text=data.get("text"))
         lvl = int(data.get("level", level))
-        kids = [cls.from_dict(c, level=lvl + 1) for c in (data.get("items") or [])]
+        kids = [
+            cls.from_dict(c, level=lvl + 1, _depth=_depth + 1)
+            for c in (data.get("items") or [])
+        ]
         return cls(runs=runs, level=lvl, items=kids)
 
 

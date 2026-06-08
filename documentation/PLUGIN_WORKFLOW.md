@@ -169,7 +169,7 @@ generated/<job>/
 | Stale derived index | stale TOC/agenda/list entries | regenerate field cache/index from current headings |
 | Blank pages/slides | `visual.blank_page`, large empty render | collapse/move/remove inherited scaffold or section break |
 | Edge bleed/clipping | `visual.edge_bleed`, visual inspection | split content, reduce block density, adjust composition |
-| Native object loss | `component_survival` warning | ensure the native writer is used (charts, SmartArt, merged tables); explain only a genuinely unsupported object (e.g. the docx TOC field) |
+| Native object loss | `component_survival` warning | ensure the native writer is used (charts, SmartArt, merged tables, docx TOC); explain only a genuinely unsupported object (e.g. a `divider` on pptx, which has no native form) |
 | XLSX range overflow | named range bounds error | split data, shrink input, or ask user to expand template range |
 | Formula loss | formula preservation finding | stop and repair generator; never ship silently |
 

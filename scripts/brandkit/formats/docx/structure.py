@@ -192,14 +192,6 @@ def _is_lone_contents_heading(el) -> bool:
     return _text_is_toc_word(_p_text(el))
 
 
-def _element_holds_toc(el) -> bool:
-    """Back-compat: True if ``el`` carries any TOC signal (strong OR a lone
-    contents-word heading). Used only by detection summaries, never to *extend*
-    the preserved span (that is anchored on strong markers in
-    :func:`classify_body_children`)."""
-    return _element_holds_strong_toc(el) or _is_lone_contents_heading(el)
-
-
 def is_toc_present(doc) -> bool:
     """Return True if the document body contains a real (strong) TOC region.
 
@@ -647,18 +639,6 @@ def _index_field_remove_indices(doc, field_id: str) -> set[int]:
     return {i for i in to_remove if i < len(children) and not _is_sectpr(children[i])}
 
 
-def remove_index_field(doc, field_id: str) -> bool:
-    """REMOVE one orphan caption-index block (its whole field span) in place.
-
-    Returns True if anything was removed. Never touches the final ``sectPr``. To
-    remove several indexes at once use :func:`remove_index_fields` - removing one
-    shifts the body-child indices the position-based ids encode, so the multi
-    variant resolves every target's elements against the ORIGINAL tree before
-    deleting any.
-    """
-    return remove_index_fields(doc, [field_id])
-
-
 def remove_index_fields(doc, field_ids: list[str]) -> set[str]:
     """REMOVE several orphan caption-index blocks in one shift-safe pass.
 
@@ -888,17 +868,6 @@ def detect_demo_region(doc) -> dict:
 # ---------------------------------------------------------------------------
 # Body clearing
 # ---------------------------------------------------------------------------
-def clear_body(doc) -> None:
-    """Remove every top-level body child except the final ``sectPr``.
-
-    Back-compat entry point (M1 behaviour). Prefer :func:`clear_body_region`, which
-    preserves the cover and TOC regions. This is now routed through the structural
-    clear with both preservation flags off, so it behaves identically to the old
-    "wipe everything" clear.
-    """
-    clear_body_region(doc, preserve_cover=False, preserve_toc=False)
-
-
 def clear_body_region(
     doc,
     structure: Optional[dict] = None,

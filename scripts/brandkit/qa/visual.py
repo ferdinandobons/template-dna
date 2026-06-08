@@ -44,6 +44,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Union
 
@@ -63,6 +64,9 @@ ImageInput = Union["Image.Image", str, Path]
 DEFAULT_DPI: int = 100  # 850x1100 for US-Letter portrait; enough for proxies
 RENDER_TIMEOUT_S: int = 90
 OCR_TIMEOUT_S: int = 30
+# Aggregate ceiling across ALL pages so a many-page document cannot turn a deep/
+# strict gate into an N x OCR_TIMEOUT_S hang; remaining pages are skipped (partial).
+OCR_TOTAL_BUDGET_S: int = 120
 OCR_TEXT_LIMIT: int = 4000
 OCR_TERM_LIMIT: int = 80
 
@@ -371,12 +375,14 @@ def _render_quicklook_thumbnail(
         )
         return []
 
+    # qlmanage names its thumbnail after the input file: ``<document.name>.png``.
+    # Accept ONLY that exact name - never glob-fall-back to an arbitrary pre-existing
+    # PNG in out_dir, which could stage a stale/unrelated frame as a bogus "render".
     produced = out_dir / f"{document.name}.png"
     if not produced.is_file():
-        matches = sorted(out_dir.glob("*.png"))
-        produced = matches[0] if matches else produced
-    if not produced.is_file():
-        _append_render_error(render_errors, "Quick Look fallback produced no PNG")
+        _append_render_error(
+            render_errors, "Quick Look fallback produced no matching PNG"
+        )
         return []
 
     target = out_dir / "page-1.png"
@@ -642,8 +648,22 @@ def run_visual_ocr(
         report["reason"] = "tesseract not found on PATH"
         return report
 
+    deadline = time.monotonic() + OCR_TOTAL_BUDGET_S
     for i, png in enumerate(png_paths, start=1):
-        text, error = _ocr_png(tesseract, Path(png), timeout_s=timeout_s)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            report["errors"].append(
+                {
+                    "page": i,
+                    "error": (
+                        f"OCR total time budget ({OCR_TOTAL_BUDGET_S}s) exhausted; "
+                        "remaining pages skipped"
+                    ),
+                }
+            )
+            break
+        page_timeout = max(1, int(min(timeout_s, remaining)))
+        text, error = _ocr_png(tesseract, Path(png), timeout_s=page_timeout)
         if error:
             report["errors"].append({"page": i, "error": error})
             continue

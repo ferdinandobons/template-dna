@@ -268,5 +268,38 @@ class ThemeColorHardeningTest(unittest.TestCase):
             self.assertEqual(colors.get("accent1"), "00AABB")
 
 
+class LinkSchemeAllowlistTest(unittest.TestCase):
+    """Hyperlink targets are scheme-allowlisted at the shared chokepoint, so author
+    content cannot wire a hostile ``file:``/``javascript:``/``data:``/``smb:`` link
+    into a generated docx/pptx. Safe + relative/fragment targets are allowed."""
+
+    def test_safe_schemes_allowed(self) -> None:
+        from brandkit.common.links import is_safe_link_url
+
+        for url in (
+            "https://example.com",
+            "http://example.com/a?b=1#c",
+            "mailto:x@example.com",
+            "tel:+15551234",
+            "#section",
+            "relative/path.html",
+        ):
+            self.assertTrue(is_safe_link_url(url), url)
+
+    def test_unsafe_schemes_refused(self) -> None:
+        from brandkit.common.links import is_safe_link_url
+
+        for url in (
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>1</script>",
+            "smb://server/share",
+            "vbscript:msgbox(1)",
+            "",
+            "   ",
+        ):
+            self.assertFalse(is_safe_link_url(url), url)
+
+
 if __name__ == "__main__":
     unittest.main()

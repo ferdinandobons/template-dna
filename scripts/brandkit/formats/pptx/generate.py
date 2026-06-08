@@ -62,6 +62,7 @@ from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
 
 from brandkit.common import text as textutil
+from brandkit.common.links import is_safe_link_url
 from brandkit.formats.pptx import structure
 from brandkit.ir import components
 from brandkit.ir import model as ir
@@ -965,7 +966,10 @@ def _set_para_runs(para, runs) -> None:
             run.font.italic = True
         if ir_run.get("u"):
             run.font.underline = True
-        if link:
+        # Only wire a link with a SAFE scheme; an unsafe target (file:/smb:/
+        # javascript:/data:/...) is dropped while the run's text is kept, so
+        # untrusted content cannot smuggle a hostile link into the deck.
+        if link and is_safe_link_url(link):
             run.hyperlink.address = link
 
 

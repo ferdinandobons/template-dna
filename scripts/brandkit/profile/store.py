@@ -360,9 +360,14 @@ def save_profile(
 
 
 def write_profile_json(directory: PathLike, profile: dict) -> Path:
-    """Write ``profile.json`` under a profile dir using the safe writer."""
+    """Write ``profile.json`` under a profile dir using the safe writer.
+
+    Keys are sorted so the on-disk form is deterministic regardless of dict
+    insertion order (matching the "deterministic, sorted keys" guarantee its caller
+    documents): re-running extract/comprehend yields a byte-identical profile.json.
+    """
     root = Path(directory)
-    data = json.dumps(profile, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
+    data = json.dumps(profile, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
     _write_under(root, PROFILE_JSON, data)
     return root / PROFILE_JSON
 

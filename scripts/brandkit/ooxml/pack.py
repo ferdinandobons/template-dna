@@ -12,8 +12,8 @@ not vendored. It does four things and nothing else:
 - :func:`read_part` - read one part's raw bytes without a full unpack.
 - :func:`list_parts` - list the part names in a package.
 
-Plus small ``lxml`` conveniences (:func:`parse_xml_bytes`, :func:`serialize_xml`)
-and namespace helpers so the rest of the engine never re-imports raw lxml glue.
+Plus a small ``lxml`` convenience (:func:`parse_xml_bytes`) and namespace helpers
+so the rest of the engine never re-imports raw lxml glue.
 
 **Determinism.** :func:`pack` writes entries in a stable order (``[Content_Types]
 .xml`` first, then ``_rels/.rels``, then the remaining parts sorted) and zeroes
@@ -86,22 +86,6 @@ def parse_xml_bytes(data: bytes) -> etree._Element:
     """
     parser = etree.XMLParser(remove_blank_text=False, resolve_entities=False)
     return etree.fromstring(data, parser=parser)
-
-
-def serialize_xml(
-    element: etree._Element, *, xml_declaration: bool = True, standalone: bool = True
-) -> bytes:
-    """Serialize an lxml element back to OOXML-flavoured bytes (UTF-8).
-
-    Emits the standalone XML declaration OOXML parts expect. No pretty-printing
-    (pretty-printing would inject whitespace text nodes that corrupt runs).
-    """
-    return etree.tostring(
-        element,
-        xml_declaration=xml_declaration,
-        encoding="UTF-8",
-        standalone=standalone,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -252,16 +236,6 @@ def read_part(src: PathLike, part_name: str) -> bytes:
         raise PackError(f"{src} is not a valid OOXML/ZIP package") from exc
 
 
-def has_part(src: PathLike, part_name: str) -> bool:
-    """Return True if ``part_name`` exists in the package."""
-    name = part_name.lstrip("/")
-    try:
-        with zipfile.ZipFile(Path(src), "r") as zf:
-            return name in zf.namelist()
-    except zipfile.BadZipFile as exc:
-        raise PackError(f"{src} is not a valid OOXML/ZIP package") from exc
-
-
 def list_parts(src: PathLike) -> list[str]:
     """Return every part name in the package (directories excluded), sorted.
 
@@ -273,20 +247,3 @@ def list_parts(src: PathLike) -> list[str]:
             return sorted(n for n in zf.namelist() if not n.endswith("/"))
     except zipfile.BadZipFile as exc:
         raise PackError(f"{src} is not a valid OOXML/ZIP package") from exc
-
-
-def read_part_xml(src: PathLike, part_name: str) -> etree._Element:
-    """Read a part and parse it as XML in one call (see :func:`read_part`)."""
-    return parse_xml_bytes(read_part(src, part_name))
-
-
-def copy_verbatim(src: PathLike, dest: PathLike) -> Path:
-    """Copy an OOXML file byte-for-byte to ``dest`` (the shell-copy primitive).
-
-    The Brand Profile keeps the template shell byte-identical; this is the one
-    sanctioned way to materialize it. Parent directories are created.
-    """
-    out = Path(dest)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(Path(src), out)
-    return out
