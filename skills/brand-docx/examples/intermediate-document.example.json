@@ -1,19 +1,115 @@
 {
   "cover": {
-    "title": "Quarterly Review",
+    "title": "Quarterly Business Review",
+    "subtitle": "Q2 2026 - Revenue, delivery and risk",
     "fields": {
-      "doc_id": "RPT-001"
+      "doc_id": "RPT-2026-014",
+      "date": "2026-06-08",
+      "author": "Strategy Office",
+      "confidentiality": "Internal"
     }
   },
   "blocks": [
-    { "type": "heading", "level": 1, "text": "Highlights" },
-    { "type": "paragraph", "text": "This paragraph resolves to the brand body style." },
-    { "type": "callout", "intent": "info", "text": "The profile chooses the callout style." },
-    { "type": "list", "items": [{ "text": "List styling comes from the profile." }] },
+    { "type": "toc", "title": "Contents", "max_level": 3 },
+
+    { "type": "heading", "level": 1, "runs": [{ "t": "Executive summary" }] },
+    {
+      "type": "paragraph",
+      "runs": [
+        { "t": "Net revenue grew " },
+        { "t": "8% quarter over quarter", "b": true },
+        { "t": ", led by " },
+        { "t": "enterprise", "i": true },
+        { "t": " expansion. Full detail in the " },
+        { "t": "revenue model", "link": "https://example.com/model" },
+        { "t": "." }
+      ]
+    },
+    {
+      "type": "kpi",
+      "layout": "row",
+      "items": [
+        { "label": "Net revenue", "value": "$4.2M", "delta": "+8%" },
+        { "label": "Gross margin", "value": "71%", "delta": "+1.4pt" },
+        { "label": "Logo churn", "value": "2.1%", "delta": "-0.3pt" }
+      ]
+    },
+    {
+      "type": "callout",
+      "intent": "success",
+      "title": "On track",
+      "runs": [{ "t": "All three north-star metrics beat plan this quarter." }]
+    },
+
+    { "type": "divider" },
+
+    { "type": "heading", "level": 1, "runs": [{ "t": "Highlights" }] },
+    {
+      "type": "list",
+      "ordered": false,
+      "items": [
+        {
+          "runs": [{ "t": "Pipeline", "b": true }, { "t": " coverage reached 3.2x." }],
+          "items": [
+            { "runs": [{ "t": "Enterprise segment up " }, { "t": "22%", "b": true }, { "t": "." }] },
+            { "text": "Mid-market steady." }
+          ]
+        },
+        { "runs": [{ "t": "Delivery SLA held at " }, { "t": "99.9%", "b": true }, { "t": "." }] }
+      ]
+    },
+    {
+      "type": "list",
+      "ordered": true,
+      "items": [
+        { "text": "Close the EMEA expansion plan." },
+        { "text": "Ship the billing migration." },
+        { "text": "Hire two senior engineers." }
+      ]
+    },
+
+    { "type": "heading", "level": 2, "runs": [{ "t": "Revenue by quarter" }] },
     {
       "type": "table",
-      "columns": ["Area", "Status"],
-      "rows": [["Pipeline", "Healthy"], ["Delivery", "Green"]]
+      "role": "default",
+      "columns": ["Quarter", "Net revenue", "Growth"],
+      "rows": [
+        ["Q1", "$3.9M", "+5%"],
+        ["Q2", "$4.2M", { "runs": [{ "t": "+8%", "b": true }] }]
+      ],
+      "caption": "Net revenue and quarter-over-quarter growth."
+    },
+    { "type": "caption", "target": "figure", "runs": [{ "t": "Figure 1. Quarterly net revenue trend." }] },
+    {
+      "type": "image",
+      "asset": "revenue_chart",
+      "alt": "Quarterly net revenue trend",
+      "caption": [{ "t": "Source: internal finance model." }]
+    },
+
+    {
+      "type": "callout",
+      "intent": "warning",
+      "title": "Watch",
+      "runs": [{ "t": "Two enterprise renewals slip into Q3 if the security review is not closed." }]
+    },
+    {
+      "type": "quote",
+      "runs": [{ "t": "Brand consistency is what lets a small team look enterprise-grade." }],
+      "attribution": "Head of Brand"
+    },
+
+    { "type": "pagebreak" },
+    { "type": "heading", "level": 1, "runs": [{ "t": "Appendix" }] },
+    {
+      "type": "paragraph",
+      "runs": [
+        { "t": "Definitions and methodology. Inline " },
+        { "t": "code", "code": true },
+        { "t": " and " },
+        { "t": "emphasis", "i": true },
+        { "t": " render with the brand body style; only the inline toggles are author intent." }
+      ]
     }
   ]
 }
