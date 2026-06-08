@@ -42,6 +42,14 @@ def _skill_md(skill: str) -> Path:
     return ROOT / "skills" / skill / "SKILL.md"
 
 
+def _profile_schema_md() -> Path:
+    return ROOT / "skills" / "brand-docx" / "reference" / "profile-schema.md"
+
+
+def _block_catalog_md() -> Path:
+    return ROOT / "skills" / "brand-docx" / "reference" / "block-catalog.md"
+
+
 class SharedComprehensionPromptTest(unittest.TestCase):
     def test_all_three_reference_docs_exist(self) -> None:
         for skill in SKILLS:
@@ -118,6 +126,40 @@ class SkillSpineTest(unittest.TestCase):
             text = _skill_md(skill).read_text(encoding="utf-8")
             self.assertIn("source_shell_sha256", text)
             self.assertIn("provenance.shell.sha256", text)
+
+
+class ReferenceDocFreshnessTest(unittest.TestCase):
+    """Fail-closed guards that the model-facing reference docs track the engine.
+
+    These catch the drift that bit us before: ``profile-schema.md`` pinned a stale
+    ``schema_version`` and ``block-catalog.md`` documented only a handful of the
+    block types the IID model actually accepts (a model writing from a stale
+    catalog would never emit the undocumented types).
+    """
+
+    def test_profile_schema_doc_mentions_current_schema_version(self) -> None:
+        from brandkit.profile.schema import SCHEMA_VERSION
+
+        text = _profile_schema_md().read_text(encoding="utf-8")
+        self.assertIn(
+            SCHEMA_VERSION,
+            text,
+            f"profile-schema.md does not mention the current SCHEMA_VERSION "
+            f"{SCHEMA_VERSION!r}; update the doc when bumping the schema",
+        )
+
+    def test_block_catalog_documents_every_block_type(self) -> None:
+        from brandkit.ir.model import BLOCK_TYPES
+
+        text = _block_catalog_md().read_text(encoding="utf-8")
+        missing = [btype for btype in BLOCK_TYPES if btype not in text]
+        self.assertEqual(
+            [],
+            missing,
+            f"block-catalog.md is missing block type(s) {missing}; a model writing "
+            f"from the catalog would never emit them. Document every key in "
+            f"brandkit.ir.model.BLOCK_TYPES.",
+        )
 
 
 if __name__ == "__main__":

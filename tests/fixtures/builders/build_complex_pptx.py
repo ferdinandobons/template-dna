@@ -41,10 +41,15 @@ NOTE - what is APPROXIMATED / SKIPPED (python-pptx limits, by design):
     task allows exactly this). Theme COLORS/FONTS are the ones that ship with
     the default template; an Acme palette is applied at the shape level.
 
-Reproducibility: no randomness, no wall-clock. The core-properties timestamps
-are pinned to a fixed instant and the embedded PNG bytes are computed
-deterministically, so re-running the builder yields a byte-identical file
-(CI-friendly).
+Reproducibility: no randomness, no wall-clock in the deck itself. The
+core-properties timestamps are pinned to a fixed instant and the embedded PNG
+bytes are computed deterministically, so two rebuilds in the SAME environment
+are identical. The output is content-reproducible within a fixed library set;
+the committed binary is the source of truth, and rebuilds may differ
+byte-for-byte across python-pptx / openpyxl / lxml versions (benign
+serialization noise - including the embedded chart workbook's own timestamped
+core.xml). Equality is therefore asserted STRUCTURALLY, not by raw bytes (see
+tests/test_fixture_determinism.py).
 
 Run:
     PYTHONPATH=scripts .venv/bin/python tests/fixtures/builders/build_complex_pptx.py

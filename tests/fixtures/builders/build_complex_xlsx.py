@@ -26,8 +26,12 @@ across as many Excel component types as openpyxl can author:
     ``AcmePercent``, ``AcmeInput``) registered on the workbook and applied.
   * Demo / sample data rows the generator is expected to clear.
 
-The output is byte-reproducible: a fixed timestamp / fixed image bytes / sorted
-defined names, so re-running the builder yields an identical file (CI-friendly).
+The output is content-reproducible within a fixed library set: a fixed timestamp
+/ fixed image bytes / sorted defined names mean two rebuilds in the SAME
+environment are identical. The committed binary is the source of truth; rebuilds
+may differ byte-for-byte (even in size) across openpyxl versions (benign
+serialization noise), so equality is asserted STRUCTURALLY, not by raw bytes
+(see tests/test_fixture_determinism.py).
 
 Run:
     PYTHONPATH=scripts .venv/bin/python tests/fixtures/builders/build_complex_xlsx.py

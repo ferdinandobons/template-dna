@@ -7,10 +7,21 @@ Concrete style ids and names live only in `profile.json`. IntermediateDocument
 content uses semantic role intent such as `heading`, `paragraph`, `callout`, and
 `table`.
 
-`schema_version` is **`1.1.0`** (`SCHEMA_VERSION`). The 1.1.0 minor bump is
-**additive**: it introduces the optional `structure` section and the optional
-per-role `usage` object. Profiles written by older extractors (1.0.0, lacking
-both) remain valid - `validate()` never rejects a profile for missing either.
+`schema_version` is **`1.2.0`** (`SCHEMA_VERSION`). The minor bumps are
+**additive**, so every profile written by an older extractor stays valid -
+`validate()` never rejects a profile for a section it lacks:
+
+- **1.1.0** introduced the optional `structure` section and the optional per-role
+  `usage` object. Profiles written by 1.0.0 extractors (lacking both) remain valid.
+- **1.2.0** introduced the optional top-level `comprehension` block - the single
+  canonical sink for the model's understanding of the template (cover slots,
+  derived-index/section conventions, role annotations, demo-vs-real
+  classification). Every extractor now stamps an empty `comprehension` block with
+  `status: "absent"` by default, so the deterministic path is the ground truth
+  until `comprehend` runs. 1.2.0 also relaxes region names (`structure.skeleton[].region`
+  and the comprehension refs) from the frozen `cover`/`toc`/`body` trio to **open
+  tokens** validated for syntax only - the generator branches on the boolean
+  region attributes, never on the name.
 
 ## The `structure` section
 
@@ -32,7 +43,11 @@ both) remain valid - `validate()` never rejects a profile for missing either.
   generation.
 - `skeleton` - an ordered list of the regions **actually present** in the
   template. Each region carries:
-  - `region` - one of `cover` | `toc` | `body`.
+  - `region` - an **open token** (since 1.2.0) validated for syntax only (dotted
+    lowercase, like a role id). docx conventionally uses the `cover` | `toc` |
+    `body` trio shown here; pptx/xlsx may use their own honest names (`agenda`,
+    `appendix`, `sheet`, …). The generator branches on the boolean attributes
+    below, never on the name.
   - `order` (int) - the region's position in the skeleton.
   - `role` - the section role id (`section.cover` | `section.toc` |
     `section.body`).

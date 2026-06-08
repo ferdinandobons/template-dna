@@ -6,7 +6,10 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -19,6 +22,7 @@ from openpyxl.workbook.defined_name import DefinedName
 from pptx import Presentation
 from pptx.util import Inches
 
+from brandkit import doctor
 from brandkit.cli import main
 from brandkit.profile import store
 
@@ -609,6 +613,83 @@ class M1SmokeTest(unittest.TestCase):
                 self.assertFalse(out.exists())
             finally:
                 os.chdir(old_cwd)
+
+
+class DoctorPreflightTest(unittest.TestCase):
+    """The ``doctor`` command is a real preflight gate: exit code reflects the
+    REQUIRED python deps, ``--json`` emits the verbatim probe(), and ``--fast``
+    skips the slow soffice render smoke-test."""
+
+    def test_doctor_returns_zero_when_required_deps_present(self) -> None:
+        # All REQUIRED python deps are installed in this venv, so the gate passes.
+        buf = StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(main(["doctor"]), 0)
+
+    def test_doctor_returns_nonzero_when_required_dep_missing(self) -> None:
+        full = doctor.probe(skip_visual_pipeline=True)
+        broken = dict(full)
+        broken["python_deps"] = {**full["python_deps"], "lxml": False}
+
+        def fake_probe(*, skip_visual_pipeline=False):
+            return broken
+
+        buf = StringIO()
+        with patch.object(doctor, "probe", fake_probe), redirect_stdout(buf):
+            self.assertEqual(main(["doctor"]), 1)
+
+    def test_doctor_missing_optional_does_not_gate(self) -> None:
+        full = doctor.probe(skip_visual_pipeline=True)
+        no_renderers = dict(full)
+        no_renderers["binaries"] = {"soffice": False, "pdftoppm": False}
+        no_renderers["visual_qa"] = False
+        no_renderers["ocr_binaries"] = {"tesseract": False}
+        no_renderers["ocr_qa"] = False
+
+        def fake_probe(*, skip_visual_pipeline=False):
+            return no_renderers
+
+        buf = StringIO()
+        with patch.object(doctor, "probe", fake_probe), redirect_stdout(buf):
+            self.assertEqual(main(["doctor"]), 0)
+
+    def test_doctor_json_emits_parseable_probe(self) -> None:
+        expected = doctor.probe(skip_visual_pipeline=True)
+
+        def fake_probe(*, skip_visual_pipeline=False):
+            return expected
+
+        buf = StringIO()
+        with patch.object(doctor, "probe", fake_probe), redirect_stdout(buf):
+            self.assertEqual(main(["doctor", "--json", "--fast"]), 0)
+
+        out = buf.getvalue()
+        # Human report lines must NOT be present in --json mode.
+        self.assertNotIn("python:docx:", out)
+        parsed = json.loads(out)
+        self.assertEqual(parsed, expected)
+
+    def test_doctor_fast_does_not_run_render_probes(self) -> None:
+        calls: list = []
+
+        def spy_pipeline(*args, **kwargs):
+            calls.append((args, kwargs))
+            return True, None
+
+        buf = StringIO()
+        with (
+            patch.object(doctor, "_probe_visual_pipeline", spy_pipeline),
+            redirect_stdout(buf),
+        ):
+            self.assertEqual(main(["doctor", "--fast"]), 0)
+
+        self.assertEqual(calls, [])
+        self.assertIn("visual QA: not probed", buf.getvalue())
+
+    def test_probe_fast_marks_visual_not_probed(self) -> None:
+        status = doctor.probe(skip_visual_pipeline=True)
+        self.assertIsNone(status["visual_qa"])
+        self.assertFalse(status["visual_qa_probed"])
 
 
 if __name__ == "__main__":

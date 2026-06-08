@@ -5,14 +5,75 @@ on:
   pull_request:
 
 jobs:
+  # Model-free lane: lint + typecheck (informational) + the full pytest suite.
+  # External renderers (soffice/pdftoppm) are absent here, so the visual QA
+  # tests degrade/skip exactly as on a developer machine without LibreOffice.
+  # The matrix enforces the supported-Python floor (pyproject requires-python
+  # ">=3.10"): the suite must pass on 3.10 (the floor), 3.11 and 3.12.
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install -r requirements.txt pytest
+      # Lint gate: pinned to the version used locally so CI and dev agree. The
+      # tracked ruff.toml (defaults + line-length 88, target py310) is the source
+      # of truth; both commands must be green before pytest runs.
+      - name: Ruff lint
+        run: |
+          python -m pip install ruff==0.15.2
+          ruff check .
+          ruff format --check .
+      # Typecheck is informational only: the engine is lxml-Optional-heavy and
+      # mypy would flag many false positives on the python-docx/lxml seams.
+      # continue-on-error keeps this a signal, never a blocking gate.
+      - name: Mypy (informational)
+        continue-on-error: true
+        run: |
+          python -m pip install mypy
+          mypy scripts/brandkit || true
+      - name: Tests
+        run: PYTHONPATH=scripts python -m pytest -q
+
+  # Real-render lane: installs LibreOffice + poppler so the gated visual E2E
+  # tests actually execute. A broken/missing renderer must FAIL this lane (not
+  # silently skip), so we assert doctor.probe()["visual_qa"] is True before
+  # running the suite. The gate mirrors tests/test_visual_qa.py: the E2E class
+  # runs only when BRANDDOCS_RUN_REAL_RENDER=1 AND vqa.renderers_available()
+  # (which is doctor.probe()["visual_qa"]).
+  real-render:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      BRANDDOCS_RUN_REAL_RENDER: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
           python-version: "3.11"
       - run: python -m pip install -r requirements.txt pytest
-      - run: PYTHONPATH=scripts python -m pytest -q
+      - name: Install LibreOffice and poppler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice poppler-utils
+      # Fail fast if the renderer chain is not actually usable: doctor.probe()
+      # smoke-tests the real DOCX/PPTX/XLSX -> PDF -> PNG pipeline, so a broken
+      # LibreOffice or missing pdftoppm makes visual_qa False and fails here
+      # BEFORE the E2E tests would otherwise skip.
+      - name: Assert renderers available
+        run: |
+          PYTHONPATH=scripts python -c "import sys; from brandkit import doctor; status = doctor.probe(); doctor.print_report(); sys.exit(0 if status['visual_qa'] else 'visual_qa unavailable: renderer probe failed')"
+      # Run only the gated real-render E2E tests. With BRANDDOCS_RUN_REAL_RENDER=1
+      # and a working renderer, the RealRenderE2ETest class is no longer skipped.
+      - name: Real-render E2E tests
+        run: PYTHONPATH=scripts python -m pytest tests/test_visual_qa.py -q

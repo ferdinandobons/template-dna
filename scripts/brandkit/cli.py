@@ -62,12 +62,26 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("list")
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
 
-    sub.add_parser("doctor")
+    p = sub.add_parser("doctor")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="print the verbatim probe() dict as JSON and skip the human report",
+    )
+    p.add_argument(
+        "--fast",
+        action="store_true",
+        help="skip the slow soffice render probes; mark visual QA as not probed",
+    )
     args = parser.parse_args(argv)
 
     if args.cmd == "doctor":
-        doctor.print_report()
-        return 0
+        status = doctor.probe(skip_visual_pipeline=args.fast)
+        if args.json:
+            print(json.dumps(status, indent=2, sort_keys=True))
+        else:
+            doctor.print_report(status)
+        return 0 if doctor.required_ok(status) else 1
     if args.cmd == "extract":
         path = Path(args.template)
         suffix = path.suffix.lower()

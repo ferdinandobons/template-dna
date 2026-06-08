@@ -49,7 +49,14 @@ BINARY_PROBE_TIMEOUT_S = 10
 VISUAL_PIPELINE_TIMEOUT_S = 45
 
 
-def probe() -> dict:
+def probe(*, skip_visual_pipeline: bool = False) -> dict:
+    """Probe required/optional dependencies and the visual render pipeline.
+
+    ``skip_visual_pipeline`` skips the slow serial soffice render smoke-test
+    (which can spawn LibreOffice up to 3x). When skipped, ``visual_qa`` is set to
+    ``None`` ("not probed") instead of running it; the binary version probes for
+    soffice/pdftoppm still run since they are cheap.
+    """
     deps = {name: importlib.util.find_spec(name) is not None for name in REQUIRED}
     optional_deps = {
         name: importlib.util.find_spec(name) is not None for name in OPTIONAL_PYTHON
@@ -72,11 +79,14 @@ def probe() -> dict:
         ocr_paths[name] = path
         if error:
             ocr_errors[name] = error
-    visual_ok = bool(bins.get("soffice")) and (
+    visual_ok: bool | None = bool(bins.get("soffice")) and (
         bool(bins.get("pdftoppm")) or bool(optional_deps.get("fitz"))
     )
     visual_error = None
-    if visual_ok:
+    if skip_visual_pipeline:
+        # "not probed": skip the slow render smoke-test entirely.
+        visual_ok = None
+    elif visual_ok:
         visual_ok, visual_error = _probe_visual_pipeline(
             paths,
             {
@@ -93,11 +103,20 @@ def probe() -> dict:
         "binary_paths": paths,
         "binary_errors": errors,
         "visual_qa": visual_ok,
+        "visual_qa_probed": not skip_visual_pipeline,
         "ocr_binaries": ocr_bins,
         "ocr_binary_paths": ocr_paths,
         "ocr_binary_errors": ocr_errors,
         "ocr_qa": bool(ocr_bins.get("tesseract")),
     }
+
+
+def required_ok(status: dict) -> bool:
+    """Return True only if every REQUIRED python dep is present.
+
+    Optional renderers/OCR tools only downgrade visual QA and never gate this.
+    """
+    return all((status.get("python_deps") or {}).get(name) for name in REQUIRED)
 
 
 def _probe_binary(name: str) -> tuple[bool, str | None, str | None]:
@@ -395,8 +414,9 @@ def _soffice_convert_cmd(
     ]
 
 
-def print_report() -> None:
-    status = probe()
+def print_report(status: dict | None = None) -> None:
+    if status is None:
+        status = probe()
     for name, ok in status["python_deps"].items():
         print(f"python:{name}: {'ok' if ok else 'missing'}")
     for name, ok in status.get("optional_python_deps", {}).items():
@@ -425,7 +445,12 @@ def print_report() -> None:
         if error and label == "unusable":
             msg += f" - {error}"
         print(msg)
-    if status["visual_qa"]:
+    if status.get("visual_qa") is None:
+        print(
+            "visual QA: not probed (--fast skips the soffice render smoke-test); "
+            "L0 deterministic QA remains available"
+        )
+    elif status["visual_qa"]:
         print("visual QA: L1 proxy + L2 manifest available")
     else:
         suffix = ""

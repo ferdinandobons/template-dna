@@ -1,0 +1,14 @@
+# Minimal project metadata. BrandDocs is distributed as a Claude Code / Codex
+# PLUGIN (see .claude-plugin/plugin.json), not as a pip package, so there is no
+# build-system here. This file exists to declare the supported-Python floor in
+# the standard, discoverable place; the CI matrix (.github/workflows/ci.yml)
+# enforces it by running the suite on 3.10 / 3.11 / 3.12.
+#
+# Ruff config lives in the tracked ruff.toml (which takes precedence over any
+# [tool.ruff] here), so it is intentionally not duplicated below.
+[project]
+name = "brand-docs"
+version = "0.1.0"
+description = "AI on-brand document generator: turn a company's Office template into unlimited on-brand .docx/.pptx/.xlsx."
+requires-python = ">=3.10"
+license = { text = "MIT" }

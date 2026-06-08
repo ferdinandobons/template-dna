@@ -53,8 +53,12 @@ Components authored (each is a real OOXML structure, not a text approximation):
   DEMO BODY: instruction / lorem-ipsum body content (an "Example heading"
     Heading-1 and following paragraphs) a generation is expected to clear.
 
-The output is byte-reproducible: every id / image byte / part is fixed, no
-random or timestamp, so re-running yields an identical file.
+The output is content-reproducible within a fixed library set: every id / image
+byte / part is fixed, with no randomness or wall-clock, so two rebuilds in the
+SAME environment are identical. The committed binary is the source of truth;
+rebuilds may differ byte-for-byte across python-docx / lxml versions (benign
+serialization noise), so equality is asserted STRUCTURALLY, not by raw bytes
+(see tests/test_fixture_determinism.py).
 
 Run:
     PYTHONPATH=scripts .venv/bin/python tests/fixtures/builders/build_complex_docx.py

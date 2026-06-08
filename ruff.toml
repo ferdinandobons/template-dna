@@ -1,0 +1,20 @@
+# Tracked ruff config. Mirrors the rules the codebase already passes:
+# ruff's default lint set (Pyflakes `F` + a pycodestyle `E` subset) with a
+# 88-char line length, pinned to the Python 3.10 floor the project targets
+# (see pyproject.toml requires-python and the CI matrix).
+# Intentionally conservative: no new strict rule families are enabled, so the
+# CI gate stays green on the existing clean code instead of forcing churn.
+line-length = 88
+target-version = "py310"
+
+# Generated artifacts and caches are gitignored; keep them out of the gate too
+# so `ruff check .` / `ruff format --check .` never trip on throwaway output.
+extend-exclude = [
+    "brand-kit",
+    "generated",
+    "tests/_out",
+]
+
+[lint]
+# Ruff defaults: Pyflakes (F) + the E4/E7/E9 pycodestyle subset.
+select = ["E4", "E7", "E9", "F"]
