@@ -439,8 +439,10 @@ class UnhandledBlockTest(unittest.TestCase):
             idoc = ir.IntermediateDocument(
                 blocks=[
                     ir.Paragraph(runs=[{"t": "real text"}]),
-                    ir.Image(src="/nope.png"),
-                    ir.Kpi(items=[ir.KpiItem(label="ARR", value="1M")]),
+                    ir.Image(
+                        src="/nope.png"
+                    ),  # missing source -> degrades, never crashes
+                    ir.Chart(),  # no native docx chart writer yet -> degrades
                 ]
             )
             before = len(Document(shell).paragraphs)
@@ -448,12 +450,12 @@ class UnhandledBlockTest(unittest.TestCase):
             docx_generate.generate(prof, shell, idoc, out, findings=findings)
             gen = Document(out)
             texts = [p.text for p in gen.paragraphs]
-            # No empty paragraph injected for the image/kpi blocks.
+            # No empty paragraph injected for the degraded blocks.
             self.assertNotIn(
                 "", [t for t in texts if t == "" and texts.index(t) >= before]
             )
             self.assertIn("real text", "\n".join(texts))
-            # Exactly the two degradation findings recorded.
+            # Exactly the two degradation findings recorded (image source missing + chart).
             degraded = [f for f in findings if f.check == "block_degraded"]
             self.assertEqual(len(degraded), 2)
             self.assertTrue(

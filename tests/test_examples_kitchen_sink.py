@@ -183,17 +183,26 @@ class DocxKitchenSink(_Base):
     GENERATE = docx_generate
 
     def test_kitchen_sink_generates_with_inline_and_native_divider(self):
+        import copy
+
+        from PIL import Image as PILImage
+
         with tempfile.TemporaryDirectory() as t:
             td = Path(t)
             loaded = self._extract(td)
+            # A real image source so the native image writer places it (the shared
+            # KITCHEN points at a missing file to exercise graceful degradation).
+            png = td / "fig.png"
+            PILImage.new("RGB", (40, 20), (10, 30, 60)).save(png)
+            data = copy.deepcopy(KITCHEN)
+            for b in data["blocks"]:
+                if b.get("type") == "image":
+                    b["src"] = str(png)
+
             out = td / "out.docx"
             sink = []
             docx_generate.generate(
-                loaded.profile,
-                loaded.shell_path,
-                parse_idoc(KITCHEN),
-                out,
-                findings=sink,
+                loaded.profile, loaded.shell_path, parse_idoc(data), out, findings=sink
             )
             self.assertTrue(out.is_file())
             report = run_qa(
@@ -220,12 +229,18 @@ class DocxKitchenSink(_Base):
             self.assertTrue(any(r.underline for r in runs), "underline run lost")
             body_xml = ET.tostring(doc.element.body).decode().lower()
             self.assertIn("hyperlink", body_xml, "hyperlink lost")
-            # Divider is now native (a paragraph border), not a degraded warning.
+            # Divider is native (a paragraph border), image is native (a:blip drawing),
+            # KPI is native (a brand table) - none should be a degraded warning.
             self.assertIn("pbdr", body_xml, "native divider rule missing")
+            self.assertIn("a:blip", body_xml, "native image not placed")
             degraded = _degraded_kinds(sink)
-            self.assertNotIn("divider", degraded, "divider should be native now")
-            # Deferred writers still degrade loudly (never silently dropped).
-            self.assertTrue({"kpi", "chart", "smartart", "image"} <= degraded)
+            self.assertEqual(
+                degraded & {"divider", "image", "kpi"},
+                set(),
+                f"these should be native now: {degraded}",
+            )
+            # Genuinely-deferred native writers still degrade loudly (never silently).
+            self.assertTrue({"chart", "smartart"} <= degraded)
 
 
 class PptxKitchenSink(_Base):

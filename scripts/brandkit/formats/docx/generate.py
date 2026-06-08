@@ -10,6 +10,7 @@ from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Emu
 
 from brandkit.common import text as textutil
 from brandkit.formats.docx import cover, structure
@@ -32,7 +33,7 @@ from brandkit.qa.model import Finding
 # no-op in the body (the live TOC field is refreshed separately by ``refresh_toc``)
 # so it is degraded as INFO, not WARNING.
 _UNHANDLED_BLOCK_TYPES: frozenset[str] = frozenset(
-    {"image", "kpi", "chart", "smartart", "component", "section", "toc"}
+    {"chart", "smartart", "component", "section", "toc"}
 )
 
 
@@ -381,6 +382,10 @@ def _write_block(
         bottom.set(qn("w:color"), "auto")
         pbdr.append(bottom)
         para._p.get_or_add_pPr().append(pbdr)
+    elif isinstance(block, ir.Image):
+        _write_image(doc, resolver, block, findings)
+    elif isinstance(block, ir.Kpi):
+        _write_kpi(doc, resolver, block, findings)
     elif block.TYPE in _UNHANDLED_BLOCK_TYPES:
         # No writer for this block in the M1 docx vertical. Skip cleanly - NEVER
         # emit a blank ``Normal`` paragraph - and record a degradation finding so
@@ -401,6 +406,83 @@ def _write_block(
         # A genuinely unknown block type is a programming error, not a degradation:
         # fail loudly rather than dropping authored content or injecting a blank.
         raise GenerationError(f"unhandled block type {block.TYPE!r}")
+
+
+def _write_kpi(doc, resolver, block, findings) -> None:
+    """Render a KPI / metric-card group as a brand-styled table (one row per metric:
+    label, value, optional delta), value bolded for prominence.
+
+    Reuses the table writer so the metric grid carries the profile's table style (no
+    fabricated KPI box style/color): a faithful native rendering instead of a dropped
+    block. The delta column is emitted only when at least one metric carries a delta.
+    """
+    items = block.items or []
+    if not items:
+        findings.append(
+            Finding(
+                "block_degraded",
+                schema.Severity.WARNING.value,
+                "'kpi' block had no items; skipped",
+            )
+        )
+        return
+    has_delta = any(getattr(k, "delta", None) for k in items)
+    rows = []
+    for k in items:
+        cells = [
+            ir.TableCell(runs=textutil.normalize_runs(k.label or "")),
+            ir.TableCell(runs=[{"t": str(k.value or ""), "b": True}]),
+        ]
+        if has_delta:
+            cells.append(ir.TableCell(runs=textutil.normalize_runs(k.delta or "")))
+        rows.append(cells)
+    _write_table(
+        doc, resolver, ir.Table(columns=[], rows=rows, role="default"), findings
+    )
+
+
+def _write_image(doc, resolver, block, findings) -> None:
+    """Place an ``Image`` block as an inline picture, sized to the section's content
+    width when no explicit size hint is given, with its caption below.
+
+    Only an external ``src`` file is placed natively; an unresolved ``src``/``asset``
+    (file missing, or only a profile asset id that cannot be loaded here) degrades to
+    a loud ``block_degraded`` WARNING rather than crashing, so authored figures are
+    realized when available and never silently lost otherwise. No brand literal is
+    written: the picture is the author's asset, sized by layout geometry.
+    """
+    src = block.src
+    placed = False
+    if src and Path(src).is_file():
+        sec = doc.sections[-1]
+        width = (
+            Emu(int(block.width_emu))
+            if block.width_emu
+            else sec.page_width - sec.left_margin - sec.right_margin
+        )
+        height = Emu(int(block.height_emu)) if block.height_emu else None
+        try:
+            run = doc.add_paragraph().add_run()
+            if height is not None:
+                run.add_picture(src, width=width, height=height)
+            else:
+                run.add_picture(src, width=width)
+            placed = True
+        except Exception:
+            # Any image-decode / placement failure degrades rather than crashing.
+            placed = False
+    if not placed:
+        findings.append(
+            Finding(
+                "block_degraded",
+                schema.Severity.WARNING.value,
+                "'image' block not placed in docx (src/asset source unavailable); skipped",
+            )
+        )
+        return
+    if block.caption:
+        para = _para_with_runs(doc, block.caption)
+        _apply_resolved_style(doc, para, resolver.resolve_role("caption"), findings)
 
 
 def _write_list_items(doc, resolver, block, items, findings) -> None:
