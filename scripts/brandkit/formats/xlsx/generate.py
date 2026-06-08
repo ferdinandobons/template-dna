@@ -21,10 +21,13 @@ from pathlib import Path
 from typing import Optional
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.utils.cell import range_boundaries
 
 from brandkit.grid.model import GridDocument
+from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
+from brandkit.profile.reconcile import confidence_clears_floor
 from brandkit.profile.resolver import ProfileResolver
 from brandkit.qa.checks_deterministic import check_no_net_structure_loss
 from brandkit.qa.model import Finding
@@ -80,7 +83,7 @@ def generate(
         sheet, coord = target["sheet"], target["range"]
         min_col, min_row, _, _ = range_boundaries(coord)
         cell = wb[sheet].cell(row=min_row, column=min_col)
-        _fill_cell(cell, value)
+        _fill_cell(cell, value, sink=sink, where=name)
         _reassert_cover_style(cell, cover_style_for_name.get(name))
 
     # Fill multi-cell named regions (bounds-guarded; never overruns the range).
@@ -97,7 +100,12 @@ def generate(
         ws = wb[sheet]
         for r_idx, row in enumerate(values):
             for c_idx, value in enumerate(row):
-                _fill_cell(ws.cell(row=min_row + r_idx, column=min_col + c_idx), value)
+                _fill_cell(
+                    ws.cell(row=min_row + r_idx, column=min_col + c_idx),
+                    value,
+                    sink=sink,
+                    where=name,
+                )
 
     # Comprehension-steered reconciliation (no-op when comprehension is absent):
     # CLEAR cover anchors / demo sample-data regions the model ruled destructive,
@@ -122,9 +130,17 @@ def generate(
         )
 
     # Destructive-action floor (plan §6): every region the reconciliation cleared
-    # must carry a corroborated destructive verdict, else ERROR. Model-free.
+    # must carry a corroborated destructive verdict AND clear the confidence floor,
+    # else ERROR. Model-free. The confidence threaded here is the model's single
+    # comprehension confidence (the same value the reconcile site gates on).
     if store.comprehension_is_present(profile):
-        sink.extend(check_no_net_structure_loss(removed_refs, profile))
+        comp = profile.get("comprehension")
+        confidence = (
+            float(comp.get("confidence") or 0.0) if isinstance(comp, dict) else None
+        )
+        sink.extend(
+            check_no_net_structure_loss(removed_refs, profile, confidence=confidence)
+        )
 
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -133,10 +149,10 @@ def generate(
     # into every ZIP entry header AND into ``docProps/core.xml`` ``dcterms:modified``
     # at save (overriding ``wb.properties.modified``), so two otherwise-identical
     # generations differ only by the save second. Normalize the saved package
-    # post-hoc - fixed ZIP timestamps (mirroring ``ooxml.pack``) + a pinned
-    # ``modified`` derived from the package's own ``created`` - so re-running the
-    # generator yields an identical file. No code-literal date is invented.
-    _normalize_for_idempotency(out)
+    # post-hoc - fixed ZIP timestamps + a ``modified`` pinned to the package's own
+    # ``created`` - so re-running the generator yields an identical file. No
+    # code-literal date is invented.
+    repack_fixed_timestamps(out, pin_modified_from_created=True)
     return out
 
 
@@ -191,15 +207,23 @@ def _reconcile_cover_and_demo(
     fills above already wrote the named regions the grid named). For each
     ``cover_slots`` entry ruled ``fill_rule=clear`` and each ``demo_classification``
     region ruled ``verdict=demo`` that maps to a surfaced named range, the cells are
-    CLEARED in place. Returns the set of refs actually cleared (anchor_ref /
-    region_ref) for the destructive floor. Formulas are never cleared - only the
-    region's own input cells.
+    CLEARED in place - but ONLY when the model's ``comprehension.confidence`` clears
+    the destructive floor; otherwise the clear is downgraded to KEEP + WARNING (a
+    wrong delete is unrecoverable). The confidence gate mirrors the docx/pptx cover
+    reconcilers so the SAME confidence yields the SAME behavior across formats.
+    Returns the set of refs actually cleared (anchor_ref / region_ref) for the
+    destructive floor. Formulas are never cleared - only the region's own input cells.
     """
     if not store.comprehension_is_present(profile):
         return set()
     comp = profile.get("comprehension")
     if not isinstance(comp, dict):
         return set()
+
+    # The model's single comprehension confidence - the SAME value the cover
+    # reconcilers gate on. Below the floor every destructive clear is downgraded.
+    confidence = float(comp.get("confidence") or 0.0)
+    floor_cleared = confidence_clears_floor(confidence)
 
     cover_anchors = ((profile.get("surface") or {}).get("xlsx") or {}).get(
         "cover_anchors"
@@ -225,6 +249,18 @@ def _reconcile_cover_and_demo(
         target = regions.get(name) if name else None
         if not target:
             continue
+        if not floor_cleared:
+            findings.append(
+                Finding(
+                    check="cover_clear_downgraded",
+                    severity=schema.Severity.WARNING.value,
+                    message=(
+                        f"cover slot {anchor_ref!r} clear not corroborated "
+                        f"(confidence {confidence:.2f}); kept"
+                    ),
+                )
+            )
+            continue
         if _clear_region(wb, target):
             removed.add(anchor_ref)
 
@@ -237,6 +273,18 @@ def _reconcile_cover_and_demo(
         name = region_to_name.get(region_ref)
         target = regions.get(name) if name else None
         if not target:
+            continue
+        if not floor_cleared:
+            findings.append(
+                Finding(
+                    check="demo_clear_downgraded",
+                    severity=schema.Severity.WARNING.value,
+                    message=(
+                        f"demo region {region_ref!r} clear not corroborated "
+                        f"(confidence {confidence:.2f}); kept"
+                    ),
+                )
+            )
             continue
         # If the grid already refilled this region, the demo rows are overwritten;
         # only clear the trailing cells the new content did NOT cover so no stale
@@ -284,61 +332,13 @@ def _cover_anchor_styles(wb, profile: dict, regions: dict) -> dict[str, str]:
 def _reassert_cover_style(cell, style_id: Optional[str]) -> None:
     """Re-apply ``style_id`` to ``cell`` after a fill, if it changed (X4).
 
-    A no-op when no brand style was captured for the anchor or the cell already
-    carries it; otherwise the captured named style (a verbatim shell id) is
-    re-asserted so a filled cover slot is guaranteed brand-styled.
+    A no-op when no brand style was captured for the anchor, the cell already
+    carries it, or the target is a merged-range slave (read-only in openpyxl);
+    otherwise the captured named style (a verbatim shell id) is re-asserted so a
+    filled cover slot is guaranteed brand-styled.
     """
-    if style_id and cell.style != style_id:
+    if style_id and not isinstance(cell, MergedCell) and cell.style != style_id:
         cell.style = style_id
-
-
-def _normalize_for_idempotency(path: Path) -> None:
-    """Rewrite a saved xlsx so two identical generations are byte-identical (X7).
-
-    openpyxl's writer stamps the wall clock into every ZIP entry header and into
-    ``docProps/core.xml`` ``dcterms:modified`` at save time, defeating idempotency.
-    This re-zips the package with a FIXED entry timestamp (the same
-    ``(1980,1,1,0,0,0)`` ``ooxml.pack`` uses) in the package's canonical part
-    order, and pins ``dcterms:modified`` to the package's OWN ``dcterms:created``
-    (a value derived from the shell - never a code-literal date). Part bytes are
-    otherwise preserved verbatim. A failure to rewrite is tolerated (idempotency is
-    a determinism nicety, not a correctness invariant) and never corrupts the file:
-    the already-saved package stays in place.
-    """
-    import re
-    import zipfile
-
-    try:
-        with zipfile.ZipFile(path, "r") as zin:
-            names = zin.namelist()
-            parts = {name: zin.read(name) for name in names}
-    except (OSError, zipfile.BadZipFile):
-        return
-
-    core = parts.get("docProps/core.xml")
-    if core is not None:
-        text = core.decode("utf-8")
-        created = re.search(r"<dcterms:created[^>]*>(.*?)</dcterms:created>", text)
-        if created:
-            text = re.sub(
-                r"(<dcterms:modified[^>]*>).*?(</dcterms:modified>)",
-                lambda m: m.group(1) + created.group(1) + m.group(2),
-                text,
-            )
-            parts["docProps/core.xml"] = text.encode("utf-8")
-
-    fixed_date = (1980, 1, 1, 0, 0, 0)
-    try:
-        tmp = path.with_name(path.name + ".tmp")
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-            # Preserve the original part order so the central directory is stable.
-            for name in names:
-                info = zipfile.ZipInfo(name, date_time=fixed_date)
-                info.compress_type = zipfile.ZIP_DEFLATED
-                zout.writestr(info, parts[name])
-        tmp.replace(path)
-    except OSError:
-        return
 
 
 def _holds_formula(cell) -> bool:
@@ -351,16 +351,44 @@ def _holds_formula(cell) -> bool:
     return isinstance(cell.value, str) and cell.value.startswith("=")
 
 
-def _fill_cell(cell, value) -> None:
-    """Write ``value`` into ``cell`` unless that would destroy a shell formula.
+def _fill_cell(
+    cell, value, *, sink: Optional[list[Finding]] = None, where: str | None = None
+) -> None:
+    """Write ``value`` into ``cell`` unless that would destroy or escape shell state.
 
-    Skips the write when the target already holds a formula (preserving the
-    shell's load-bearing formula verbatim) or when ``value`` is ``None`` (a sparse
-    / ragged grid row must not blank a preserved cell). Every other value -
+    Skips the write when ``value`` is ``None`` (a sparse / ragged grid row must not
+    blank a preserved cell), when the target is a merged-range SLAVE cell (only a
+    merge's top-left anchor is writable in openpyxl; writing a slave raises
+    ``AttributeError`` - a named region whose first row straddles a merged banner
+    routes a fill onto a slave), or when the target already holds a formula
+    (preserving the shell's load-bearing formula verbatim). Every other value -
     including the empty string the grid may use for an intentionally cleared cell -
     is written through.
+
+    A dropped non-``None`` value on a merged slave is surfaced as a
+    ``block_degraded`` WARNING on ``sink`` (the merged banner keeps its shell value)
+    so the skip is visible in QA rather than a silent loss, honoring the engine's
+    "never drop content silently" invariant.
     """
-    if value is None or _holds_formula(cell):
+    if value is None:
+        return
+    if isinstance(cell, MergedCell):
+        if sink is not None:
+            loc = f"{where} ({cell.coordinate})" if where else cell.coordinate
+            sink.append(
+                Finding(
+                    check="block_degraded",
+                    severity=schema.Severity.WARNING.value,
+                    message=(
+                        "value not written to merged-region slave cell "
+                        f"{loc} (only the merge anchor is writable); the merged "
+                        "banner kept its shell value"
+                    ),
+                    location=loc,
+                )
+            )
+        return
+    if _holds_formula(cell):
         return
     cell.value = value
 
@@ -383,6 +411,9 @@ def _clear_region(wb, target: dict, *, skip_rows: int = 0) -> bool:
     for r in range(min_row + skip_rows, max_row + 1):
         for c in range(min_col, max_col + 1):
             cell = ws.cell(row=r, column=c)
+            if isinstance(cell, MergedCell):
+                continue  # a merged slave is read-only; clearing it is a no-op by
+                # design (the merge anchor carries the value, slaves inherit it)
             if _holds_formula(cell):
                 continue  # preserve formulas
             cell.value = None

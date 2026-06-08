@@ -190,6 +190,10 @@ class XlsxComprehensionReconciliation(unittest.TestCase):
             res = self._comprehend(
                 prof,
                 {
+                    # Confident classification: above the destructive floor so the
+                    # demo clear is honored (the uniform confidence floor now gates
+                    # the xlsx demo clear, mirroring the docx/pptx cover reconcilers).
+                    "confidence": 0.9,
                     "cover_slots": {
                         "anchor.titlecell": {
                             "semantic_role": "title",
@@ -248,6 +252,9 @@ class XlsxComprehensionReconciliation(unittest.TestCase):
             self._comprehend(
                 prof,
                 {
+                    # Above the destructive floor so the demo clear actually fires
+                    # (otherwise idempotency would hold trivially over a no-op clear).
+                    "confidence": 0.9,
                     "cover_slots": {"anchor.titlecell": {"fill_rule": "in_place"}},
                     "demo_classification": {
                         "regions": [
@@ -272,7 +279,11 @@ class XlsxComprehensionReconciliation(unittest.TestCase):
             prof = loaded.profile
             res = self._comprehend(
                 prof,
-                {"cover_slots": {"anchor.titlecell": {"fill_rule": "clear"}}},
+                {
+                    # Above the destructive floor so the cover clear is honored.
+                    "confidence": 0.9,
+                    "cover_slots": {"anchor.titlecell": {"fill_rule": "clear"}},
+                },
             )
             self.assertTrue(res.ok, res.problems)
             grid = GridDocument()  # nothing filled; the anchor is just cleared
@@ -289,6 +300,85 @@ class XlsxComprehensionReconciliation(unittest.TestCase):
             self.assertIsNone(
                 ws["A1"].value
             )  # placeholder cleared, not left as {{title}}
+
+    def test_low_confidence_demo_clear_downgraded_to_keep(self) -> None:
+        # A demo verdict the model is NOT confident about (< the destructive floor):
+        # the uniform confidence floor downgrades the clear to KEEP + WARNING, so the
+        # stale demo row SURVIVES rather than being deleted (a wrong delete is
+        # unrecoverable). Mirrors the docx/pptx cover-clear downgrade.
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract_profile(td, data_rows=2)
+            prof = loaded.profile
+            res = self._comprehend(
+                prof,
+                {
+                    "confidence": 0.3,  # below DESTRUCTIVE_CONFIDENCE_FLOOR (0.5)
+                    "cover_slots": {
+                        "anchor.titlecell": {
+                            "binds_to": "title",
+                            "fill_rule": "in_place",
+                        }
+                    },
+                    "demo_classification": {
+                        "regions": [
+                            {"region_ref": "region.dataregion", "verdict": "demo"}
+                        ]
+                    },
+                },
+            )
+            self.assertTrue(res.ok, res.problems)
+            # The grid refills only ONE row, so the second demo row would be cleared
+            # by a corroborated demo clear; under the floor it must be kept.
+            grid = GridDocument(
+                cells={"title_cell": "Quarterly Model"},
+                regions={"data_region": [["Pipeline", 42]]},
+            )
+            findings: list = []
+            out = td / "out.xlsx"
+            xlsx_generate.generate(
+                prof, loaded.shell_path, grid, out, findings=findings
+            )
+            # KEEP + WARNING, and NO net-loss ERROR (nothing was removed).
+            self.assertTrue(
+                any(f.check == "demo_clear_downgraded" for f in findings),
+                [f.check for f in findings],
+            )
+            self.assertFalse([f for f in findings if f.severity == "ERROR"])
+            ws = load_workbook(out, data_only=False)["Report"]
+            self.assertEqual(ws["A4"].value, "Pipeline")  # grid-refilled row
+            # The trailing demo row was NOT cleared (low-confidence -> keep).
+            self.assertEqual(ws["A5"].value, "Example row 2")
+
+    def test_low_confidence_cover_clear_downgraded_to_keep(self) -> None:
+        # A cover clear the model is NOT confident about: downgraded to KEEP + WARNING,
+        # so the placeholder is left in place rather than emptied.
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract_profile(td)
+            prof = loaded.profile
+            res = self._comprehend(
+                prof,
+                {
+                    "confidence": 0.3,  # below the floor
+                    "cover_slots": {"anchor.titlecell": {"fill_rule": "clear"}},
+                },
+            )
+            self.assertTrue(res.ok, res.problems)
+            grid = GridDocument()  # nothing filled; only the (downgraded) clear acts
+            findings: list = []
+            out = td / "out.xlsx"
+            xlsx_generate.generate(
+                prof, loaded.shell_path, grid, out, findings=findings
+            )
+            self.assertTrue(
+                any(f.check == "cover_clear_downgraded" for f in findings),
+                [f.check for f in findings],
+            )
+            self.assertFalse([f for f in findings if f.severity == "ERROR"])
+            ws = load_workbook(out, data_only=False)["Report"]
+            # Placeholder NOT cleared (low-confidence -> keep).
+            self.assertEqual(ws["A1"].value, "{{title}}")
 
     def test_absent_comprehension_uses_deterministic_path(self) -> None:
         with tempfile.TemporaryDirectory() as t:

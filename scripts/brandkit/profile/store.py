@@ -423,6 +423,11 @@ def load_profile(
     except (OSError, json.JSONDecodeError) as exc:
         raise ProfileStoreError(f"cannot read {loc.profile_json}: {exc}") from exc
 
+    # Forward-migration seam (additive-forever): identity today, so this is
+    # behaviour-identical, but a future cross-major migration would normalise the
+    # profile here BEFORE validate sees it.
+    profile = schema.migrate(profile)
+
     kind = profile.get("kind")
     ext = schema.KIND_EXTENSION.get(kind, kind or "")
     shell_path = loc.directory / "template" / f"shell.{ext}"

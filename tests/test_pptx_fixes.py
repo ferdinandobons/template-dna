@@ -31,9 +31,13 @@ import lxml.etree as ET
 from pptx import Presentation
 from pptx.util import Inches
 
+from docx import Document
+
+from brandkit.formats.docx import generate as docx_generate
 from brandkit.formats.pptx import extract as px
 from brandkit.formats.pptx import generate as pg
 from brandkit.formats.pptx import structure as ps
+from brandkit.ir import components as ir_components
 from brandkit.ir import model as ir
 from brandkit.ir.model import parse_idoc
 from brandkit.profile import schema, store
@@ -66,6 +70,23 @@ def _placeholderless_template(path: Path) -> None:
         sp_tree = layout.shapes._spTree
         for ph in list(layout.placeholders):
             sp_tree.remove(ph._element)
+    prs.save(path)
+
+
+def _multibody_template(path: Path) -> None:
+    """A deck whose CONTENT layout exposes TWO body placeholders at distinct idxs.
+
+    python-pptx's default layout index 3 ("Two Content") carries a title (idx 0)
+    plus two OBJECT body placeholders (idx 1 and idx 2). Renaming it lets a test
+    prove the body-content path writes into the profile-NAMED ``ph_idx`` (idx 2,
+    the second body) rather than the positional first body placeholder (idx 1).
+    Index 0 ("Title Slide") is renamed as the cover.
+    """
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    prs.slide_layouts[0].name = "BrandCover"
+    prs.slide_layouts[3].name = "BrandTwoBody"
     prs.save(path)
 
 
@@ -406,6 +427,129 @@ class M6M7GenerateFromRealLayouts(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Body placeholder is chosen by the profile-resolved ph_idx (not positionally)
+# ---------------------------------------------------------------------------
+def _placeholder_text_by_idx(slide, idx: int) -> str:
+    for shape in slide.placeholders:
+        if shape.placeholder_format.idx == idx and shape.has_text_frame:
+            return shape.text
+    return ""
+
+
+class BodyPlaceholderHonorsResolvedIdx(unittest.TestCase):
+    """Body content is written into the placeholder the profile RESOLVED (its
+    ``paragraph`` role's ``ph_idx``), not merely the positional first body
+    placeholder. The two diverge only on a multi-body layout; this proves the
+    schema's resolved ``ph_idx`` is honored (compute-validate-USE, not
+    compute-validate-ignore), while the positional fallback still covers a stub /
+    absent idx so the brand guarantee never fabricates a placeholder.
+    """
+
+    def _multibody_profile(self, template: Path, *, body_idx: int) -> dict:
+        """Extract a profile from the multi-body deck, then point BOTH content roles
+        at the "BrandTwoBody" layout with ``paragraph`` resolving to ``body_idx``
+        (the second body placeholder). This is the source-of-truth contract the
+        generator must honor."""
+        profile = _extract_profile(template)
+        roles = profile["roles"]
+        roles["heading.1"]["resolver"] = {
+            "type": "placeholder",
+            "layout": "BrandTwoBody",
+            "ph_idx": 0,
+            "ph_type": "title",
+        }
+        roles["paragraph"]["resolver"] = {
+            "type": "placeholder",
+            "layout": "BrandTwoBody",
+            "ph_idx": body_idx,
+            "ph_type": "body",
+        }
+        return profile
+
+    def test_body_written_into_named_idx_not_first(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "twobody.pptx"
+            _multibody_template(template)
+            # The deck's content layout exposes TWO body placeholders (idx 1 + 2);
+            # the profile names the SECOND (idx 2) for body content.
+            profile = self._multibody_profile(template, body_idx=2)
+            out = tp / "out.pptx"
+            idoc = parse_idoc(
+                {
+                    "blocks": [
+                        {"type": "heading", "level": 1, "text": "Section A"},
+                        {"type": "paragraph", "text": "Body into the named idx."},
+                    ]
+                }
+            )
+            pg.generate(profile, template, idoc, out)
+            res = Presentation(out)
+            content = next(
+                s for s in res.slides if s.slide_layout.name == "BrandTwoBody"
+            )
+            # The content landed in the NAMED placeholder (idx 2), not the first
+            # body placeholder (idx 1, which stays empty).
+            self.assertIn(
+                "Body into the named idx.", _placeholder_text_by_idx(content, 2)
+            )
+            self.assertEqual(_placeholder_text_by_idx(content, 1), "")
+
+    def test_first_body_used_when_named_idx_is_first(self) -> None:
+        # Control: when the profile names the FIRST body idx (idx 1), the resolved
+        # selection and the positional fallback agree - content lands in idx 1.
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "twobody.pptx"
+            _multibody_template(template)
+            profile = self._multibody_profile(template, body_idx=1)
+            out = tp / "out.pptx"
+            idoc = parse_idoc(
+                {
+                    "blocks": [
+                        {"type": "heading", "level": 1, "text": "Section A"},
+                        {"type": "paragraph", "text": "Body into the first body."},
+                    ]
+                }
+            )
+            pg.generate(profile, template, idoc, out)
+            res = Presentation(out)
+            content = next(
+                s for s in res.slides if s.slide_layout.name == "BrandTwoBody"
+            )
+            self.assertIn(
+                "Body into the first body.", _placeholder_text_by_idx(content, 1)
+            )
+            self.assertEqual(_placeholder_text_by_idx(content, 2), "")
+
+    def test_falls_back_to_first_body_when_idx_absent(self) -> None:
+        # When the profile names an idx the slide does NOT carry (stub-like), the
+        # body-placeholder selection falls back to the positional first body
+        # placeholder - never fabricating a placeholder, never dropping content.
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "twobody.pptx"
+            _multibody_template(template)
+            # idx 99 is absent from the layout -> fallback to the first body (idx 1).
+            profile = self._multibody_profile(template, body_idx=99)
+            out = tp / "out.pptx"
+            idoc = parse_idoc(
+                {
+                    "blocks": [
+                        {"type": "heading", "level": 1, "text": "Section A"},
+                        {"type": "paragraph", "text": "Fallback body text."},
+                    ]
+                }
+            )
+            pg.generate(profile, template, idoc, out)
+            res = Presentation(out)
+            content = next(
+                s for s in res.slides if s.slide_layout.name == "BrandTwoBody"
+            )
+            self.assertIn("Fallback body text.", _placeholder_text_by_idx(content, 1))
+
+
+# ---------------------------------------------------------------------------
 # M-i-7 - fact enrichment + reconcile-not-rebuild
 # ---------------------------------------------------------------------------
 _P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
@@ -486,8 +630,10 @@ def _present_comp(prof: dict, comp: dict, *, confidence: float = 0.9) -> None:
     block = schema.empty_comprehension()
     block["status"] = schema.ComprehensionStatus.PRESENT.value
     block["source_shell_sha256"] = sha
-    block["confidence"] = confidence
     block.update(comp)
+    # The explicit kwarg wins over any confidence carried in ``comp`` (e.g. the
+    # default _comp_for value), so a test can force a below-floor confidence.
+    block["confidence"] = confidence
     prof["comprehension"] = block
 
 
@@ -594,6 +740,10 @@ class MI7ReconcileNotRebuildTest(unittest.TestCase):
                 "demo_value": "",
             }
         return {
+            # A confident classification (clears the destructive floor): a demo clear
+            # represents a confident "this is boilerplate" judgement. The CLI path
+            # round-trips this through comprehension.merge, which propagates it.
+            "confidence": 0.9,
             "cover_slots": slots,
             "conventions": {
                 "indexes": [
@@ -692,6 +842,45 @@ class MI7ReconcileNotRebuildTest(unittest.TestCase):
             # nothing was removed without corroboration (no net-loss ERROR).
             self.assertIn("Real Structural Slide", _titles(res))
             self.assertTrue(any(f.check == "demo_clear_downgraded" for f in findings))
+            self.assertFalse(
+                any(
+                    f.check == "no_net_structure_loss" and f.severity == "ERROR"
+                    for f in findings
+                )
+            )
+
+    def test_demo_clear_downgraded_when_below_confidence_floor(self) -> None:
+        # The demo slide IS corroborated by determinism (body == layout prompt), but
+        # the model's confidence is below the destructive floor (0.3 < 0.5): the
+        # slide is KEPT + WARNING, uniform with the docx/xlsx/cover sites. A wrong
+        # delete is not recoverable, so low confidence keeps it.
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "deck.pptx"
+            body_prompt = _reconcile_deck(template)
+            prof = _extract_on_disk(template, tp)
+            _present_comp(prof, self._comp_for(prof), confidence=0.3)
+
+            out = tp / "out.pptx"
+            findings: list[Finding] = []
+            pg.generate(prof, template, self._idoc(), out, findings=findings)
+            res = Presentation(out)
+            bodies = "\n".join(
+                pg._first_body_placeholder(s).text
+                for s in res.slides
+                if pg._first_body_placeholder(s) is not None
+            )
+            # The corroborated demo slide is KEPT (its prompt body survives) because
+            # confidence did not clear the floor, and the downgrade is surfaced.
+            if body_prompt:
+                self.assertIn(body_prompt, bodies)
+            self.assertTrue(
+                any(
+                    f.check == "demo_clear_downgraded" and "confidence" in f.message
+                    for f in findings
+                )
+            )
+            # KEEP-on-low-confidence is not a net loss, so no ERROR.
             self.assertFalse(
                 any(
                     f.check == "no_net_structure_loss" and f.severity == "ERROR"
@@ -1165,6 +1354,215 @@ class PptxCheapFidelityTest(unittest.TestCase):
             # the new text (rPr-preserving fill, not a clobbered text frame).
             tf = cover.shapes.title.text_frame
             self.assertEqual(len([p for p in tf.paragraphs]), 1)
+
+
+class SilentDropFix(unittest.TestCase):
+    """Component/Section/Toc/Divider must not vanish silently in pptx.
+
+    ``_sections`` routes every non-heading / non-pagebreak block into a slide body,
+    which feeds ``_body_lines``. Before the fix these four block types fell through
+    with no output and no finding - a silent content drop, asymmetric with the docx
+    leg (which expands Component/Section) and with the pptx kpi/chart/smartart/image
+    blocks (which loudly ``_degrade``). Each now records a ``block_degraded``
+    WARNING so the unrendered block is visible in QA, honoring the engine's
+    "never drop content silently" invariant.
+    """
+
+    def test_unhandled_blocks_surface_as_block_degraded(self) -> None:
+        blocks = [
+            ir.Paragraph.from_dict({"type": "paragraph", "text": "kept"}),
+            ir.Component.from_dict({"type": "component", "ref": "hero"}),
+            ir.Section.from_dict({"type": "section", "ref": "intro"}),
+            ir.Toc.from_dict({"type": "toc", "title": "Contents"}),
+            ir.Divider.from_dict({"type": "divider"}),
+        ]
+        sink: list[Finding] = []
+        lines = pg._body_lines(blocks, sink)
+        # The real paragraph still renders.
+        self.assertIn("kept", [line.text for line in lines])
+        # All four unhandled types surfaced, none silently dropped.
+        self.assertEqual(len(sink), 4)
+        self.assertTrue(all(f.check == "block_degraded" for f in sink))
+        self.assertTrue(all(f.severity == "WARNING" for f in sink))
+        kinds = sorted(f.message.split("'")[1] for f in sink)
+        self.assertEqual(kinds, ["component", "divider", "section", "toc"])
+
+
+class ComponentExpansionSymmetryTest(unittest.TestCase):
+    """Profile-defined component/section fragments expand the SAME on both IID legs.
+
+    The docx leg already wired ``components.expand_components`` at the top of
+    ``generate``; this proves the pptx leg now does too (TASK #8). A defined ref
+    becomes its primitive sub-blocks in BOTH outputs (and the ``component``/
+    ``section`` block does not survive to a writer); an undefined ref RAISES
+    ``ComponentExpansionError`` on the pptx leg, symmetric with docx and fail-closed.
+
+    Scope: STATIC, profile-defined expansion. Registry auto-POPULATION and ``slots``
+    PARAMETERIZATION remain deferred milestones, intentionally not exercised here.
+    """
+
+    _COMPONENT_IDOC = {
+        "blocks": [
+            {"type": "component", "ref": "intro"},
+            {"type": "heading", "level": 1, "text": "Real Section"},
+            {"type": "paragraph", "text": "Authored body."},
+        ]
+    }
+
+    @staticmethod
+    def _component_registry() -> dict:
+        return {
+            "intro": {
+                "blocks": [
+                    {"type": "heading", "level": 1, "text": "Intro Heading"},
+                    {"type": "paragraph", "text": "Intro body from the fragment."},
+                ]
+            }
+        }
+
+    def test_pptx_expands_defined_component(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "branded.pptx"
+            _branded_template(template)
+            out = tp / "out.pptx"
+            profile = _extract_profile(template)
+            profile["components"] = self._component_registry()
+            idoc = parse_idoc(self._COMPONENT_IDOC)
+            pg.generate(profile, template, idoc, out)
+            text = _all_text(Presentation(out))
+            # The fragment's PRIMITIVE content is present in the deck...
+            self.assertIn("Intro Heading", text)
+            self.assertIn("Intro body from the fragment", text)
+            # ...alongside the authored content, and nothing was dropped silently.
+            self.assertIn("Real Section", text)
+            self.assertIn("Authored body", text)
+
+    def test_docx_expands_defined_component(self) -> None:
+        """The SAME profile + idoc expands on the docx leg (cross-format symmetry)."""
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            shell = tp / "shell.docx"
+            Document().save(shell)
+            out = tp / "out.docx"
+            profile = schema.build_envelope("docx", {"name": "t"})
+            profile["surface"] = {"docx": {}}
+            profile["roles"] = {"_index": []}
+            profile["components"] = self._component_registry()
+            idoc = parse_idoc(self._COMPONENT_IDOC)
+            docx_generate.generate(profile, shell, idoc, out)
+            text = "\n".join(p.text for p in Document(out).paragraphs)
+            self.assertIn("Intro Heading", text)
+            self.assertIn("Intro body from the fragment", text)
+            self.assertIn("Real Section", text)
+            self.assertIn("Authored body", text)
+
+    def test_component_block_does_not_survive_expansion(self) -> None:
+        """After expansion the document carries primitives only - no ``component``."""
+        profile = schema.build_envelope("pptx", {"name": "deck"})
+        profile["components"] = self._component_registry()
+        idoc = parse_idoc(self._COMPONENT_IDOC)
+        expanded = ir_components.expand_components(idoc, profile)
+        types = [b.TYPE for b in expanded.blocks]
+        self.assertNotIn("component", types)
+        self.assertEqual(types, ["heading", "paragraph", "heading", "paragraph"], types)
+
+    def test_pptx_undefined_ref_raises(self) -> None:
+        """An undefined component ref RAISES on the pptx leg (symmetric with docx)."""
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "branded.pptx"
+            _branded_template(template)
+            out = tp / "out.pptx"
+            profile = _extract_profile(template)  # empty components registry
+            idoc = parse_idoc({"blocks": [{"type": "component", "ref": "ghost"}]})
+            with self.assertRaises(ir_components.ComponentExpansionError):
+                pg.generate(profile, template, idoc, out)
+
+    def test_pptx_undefined_section_ref_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "branded.pptx"
+            _branded_template(template)
+            out = tp / "out.pptx"
+            profile = _extract_profile(template)  # empty sections registry
+            idoc = parse_idoc({"blocks": [{"type": "section", "ref": "ghost"}]})
+            with self.assertRaises(ir_components.ComponentExpansionError):
+                pg.generate(profile, template, idoc, out)
+
+
+class FragmentRegistryValidationTest(unittest.TestCase):
+    """``schema.validate`` reports a malformed components/sections registry entry.
+
+    Well-formedness only: each entry must be a dict carrying a ``blocks`` list. A
+    malformed entry is surfaced (fail-closed) rather than blowing up later inside
+    the expander. Block CONTENTS are not re-checked here (``block_from_dict`` owns
+    that contract).
+    """
+
+    def test_component_entry_missing_blocks_is_reported(self) -> None:
+        prof = schema.build_envelope("pptx", {"name": "deck"})
+        prof["components"] = {"intro": {"description": "no blocks here"}}
+        problems = schema.validate(prof)
+        self.assertTrue(any("components.intro.blocks" in p for p in problems), problems)
+
+    def test_section_entry_not_an_object_is_reported(self) -> None:
+        prof = schema.build_envelope("pptx", {"name": "deck"})
+        prof["sections"] = {"hero": ["not", "a", "dict"]}
+        problems = schema.validate(prof)
+        self.assertTrue(any("sections.hero" in p for p in problems), problems)
+
+    def test_registry_not_a_map_is_reported(self) -> None:
+        prof = schema.build_envelope("pptx", {"name": "deck"})
+        prof["components"] = ["not", "a", "map"]
+        problems = schema.validate(prof)
+        self.assertTrue(any(p.startswith("components:") for p in problems), problems)
+
+    def test_well_formed_registry_validates_clean(self) -> None:
+        prof = schema.build_envelope("pptx", {"name": "deck"})
+        prof["components"] = {
+            "intro": {"blocks": [{"type": "paragraph", "text": "ok"}]}
+        }
+        prof["sections"] = {"hero": {"blocks": []}}
+        problems = schema.validate(prof)
+        self.assertFalse(
+            any(p.startswith(("components", "sections")) for p in problems), problems
+        )
+
+
+class AgendaDetectionHonorsBodyIdx(unittest.TestCase):
+    """On a multi-body layout, agenda DETECTION reads the same profile-resolved
+    ``ph_idx`` body the refresh write path targets - so detect and rewrite never
+    point at different placeholders. Before the fix _existing_agenda_slide read the
+    positional first body while _regenerate_agenda wrote into the named idx.
+    """
+
+    def test_existing_agenda_detected_via_named_idx_not_first_body(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            template = Path(td) / "deck.pptx"
+            _multibody_template(template)
+            prs = Presentation(template)
+            two_body = next(
+                lay for lay in prs.slide_layouts if lay.name == "BrandTwoBody"
+            )
+            # Slide 0: a cover-ish slide so the section sldIdLst has ids to point at.
+            prs.slides.add_slide(prs.slide_layouts[0])
+            # Slide 1: the agenda. Its section list lives in the SECOND body (idx 2),
+            # NOT the first (idx 1), which carries unrelated text.
+            agenda = prs.slides.add_slide(two_body)
+            agenda.shapes.title.text = "Sommario"
+            agenda.placeholders[1].text = "unrelated first-body text"
+            agenda.placeholders[2].text = "Alpha\nBeta"
+            _add_section_list(prs, sections=[("Alpha", [0]), ("Beta", [1])])
+            prs.save(template)
+
+            prs = Presentation(template)
+            # Detect honoring the NAMED idx (2) finds the agenda (its idx-2 body
+            # lists exactly the section names).
+            self.assertIsNotNone(pg._existing_agenda_slide(prs, 2))
+            # Reading the positional first body (idx 1) would NOT match (it carries
+            # unrelated text), so the old positional detection missed this agenda.
+            self.assertIsNone(pg._existing_agenda_slide(prs, 1))
 
 
 if __name__ == "__main__":  # pragma: no cover

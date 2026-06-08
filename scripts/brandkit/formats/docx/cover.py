@@ -28,6 +28,7 @@ from brandkit.formats.docx.structure import (
 from brandkit.ir.model import Cover
 from brandkit.qa.model import Finding
 from brandkit.profile import schema
+from brandkit.profile.reconcile import confidence_clears_floor
 
 
 PLACEHOLDER_TITLE = "{{title}}"
@@ -270,13 +271,6 @@ def discover_cover(doc) -> tuple[list[dict], dict]:
         }
     }
     return anchors, anchor_block
-
-
-# Below this confidence the model's DESTRUCTIVE verdicts (a ``clear`` on a slot
-# determinism does not also corroborate) are downgraded to KEEP+WARNING. Additive
-# FILL is never gated on confidence (a wrong fill is recoverable; a wrong delete
-# is not - the destructive-action floor, plan §6).
-_DESTRUCTIVE_CONFIDENCE_FLOOR: float = 0.5
 
 
 def compose_cover(
@@ -561,7 +555,7 @@ def _clear_is_corroborated(el, confidence: float) -> bool:
     confidence clears the floor. Both conditions are required; otherwise the slot
     is kept.
     """
-    if confidence < _DESTRUCTIVE_CONFIDENCE_FLOOR:
+    if not confidence_clears_floor(confidence):
         return False
     ln = _local_name(el.tag)
     if ln == "sdt":

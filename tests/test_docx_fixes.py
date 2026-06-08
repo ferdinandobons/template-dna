@@ -974,6 +974,112 @@ class ComprehensionReconcileTest(unittest.TestCase):
             self.assertIn("entry one", text)
             self.assertTrue(any(f.check == "index_clear_downgraded" for f in findings))
 
+    def test_index_clear_downgraded_when_below_confidence_floor(self):
+        # A CLEAR the model is NOT confident about (< the destructive floor) is
+        # downgraded to KEEP + WARNING EVEN WHEN the verdict is otherwise corroborated
+        # (here the index's region is tagged demo). This proves the confidence floor
+        # gates the docx index clear independently, mirroring the docx/pptx cover
+        # reconcilers - the SAME confidence now yields the SAME behavior per format.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            prof = self._profile_for(shell)
+            s = prof["surface"]["docx"]
+            tabella = next(f["id"] for f in s["fields"] if f["seq_id"] == "Tabella")
+            comp = {
+                "conventions": {
+                    "indexes": [
+                        {
+                            "index_ref": tabella,
+                            "seq_id": "Tabella",
+                            "reconcile": "clear",
+                        }
+                    ],
+                    "sections": [],
+                },
+                # The verdict WOULD corroborate (region tagged demo); only the low
+                # confidence blocks the clear.
+                "demo_classification": {
+                    "regions": [{"region_ref": f"region.{tabella}", "verdict": "demo"}]
+                },
+            }
+            _present_comp(prof, comp, confidence=0.3)  # below the floor (0.5)
+            out = Path(td) / "out.docx"
+            findings: list[Finding] = []
+            docx_generate.generate(
+                prof,
+                shell,
+                ir.IntermediateDocument(
+                    blocks=[ir.Heading(level=1, runs=[{"t": "Real Section"}])],
+                    cover=None,
+                ),
+                out,
+                findings=findings,
+            )
+            gen = Document(out)
+            text = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
+            # The index was KEPT (low confidence) and a WARNING was recorded.
+            self.assertIn("entry one", text)
+            downgrades = [f for f in findings if f.check == "index_clear_downgraded"]
+            self.assertTrue(downgrades)
+            self.assertIn("confidence 0.30", downgrades[0].message)
+            # Nothing was removed -> no net-loss ERROR.
+            self.assertFalse(
+                any(
+                    f.check == "no_net_structure_loss"
+                    and f.severity == schema.Severity.ERROR.value
+                    for f in findings
+                )
+            )
+
+    def test_high_confidence_corroborated_index_clear_still_fires(self):
+        # The positive control for the floor: a corroborated CLEAR whose confidence
+        # clears the floor is still honored (the index is removed), so the floor only
+        # blocks the LOW-confidence case, never the confident one.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            prof = self._profile_for(shell)
+            s = prof["surface"]["docx"]
+            tabella = next(f["id"] for f in s["fields"] if f["seq_id"] == "Tabella")
+            comp = {
+                "conventions": {
+                    "indexes": [
+                        {
+                            "index_ref": tabella,
+                            "seq_id": "Tabella",
+                            "reconcile": "clear",
+                        }
+                    ],
+                    "sections": [],
+                },
+                "demo_classification": {
+                    "regions": [{"region_ref": f"region.{tabella}", "verdict": "demo"}]
+                },
+            }
+            _present_comp(prof, comp, confidence=0.9)  # clears the floor
+            out = Path(td) / "out.docx"
+            findings: list[Finding] = []
+            docx_generate.generate(
+                prof,
+                shell,
+                ir.IntermediateDocument(
+                    blocks=[ir.Heading(level=1, runs=[{"t": "Real Section"}])],
+                    cover=None,
+                ),
+                out,
+                findings=findings,
+            )
+            gen = Document(out)
+            text = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
+            # The stale caption index was removed (entries + heading gone).
+            self.assertNotIn("entry one", text)
+            self.assertNotIn("Index of Tables", text)
+            self.assertFalse(any(f.check == "index_clear_downgraded" for f in findings))
+            self.assertFalse(any(f.check == "no_net_structure_loss" for f in findings))
+
     def test_absent_comprehension_uses_deterministic_path(self):
         import tempfile
 

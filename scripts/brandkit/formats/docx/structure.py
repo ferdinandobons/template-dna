@@ -35,23 +35,19 @@ from typing import Optional
 
 from docx.oxml import OxmlElement
 
+from brandkit.ooxml.fields import iter_complex_field_events
+from brandkit.ooxml.names import local_name as _local_name, make_qn
+from brandkit.ooxml.pack import NAMESPACES
+
 # ---------------------------------------------------------------------------
 # OOXML namespaces. python-docx registers ``w`` but the literal URI is kept here
-# so element matching is robust regardless of prefix registration.
+# so element matching is robust regardless of prefix registration. ``w`` and
+# ``_local_name`` come from the shared :mod:`brandkit.ooxml.names` layer; they are
+# re-exported here (and ``W_NS`` is kept) so existing importers keep working.
 # ---------------------------------------------------------------------------
-W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+W_NS = NAMESPACES["w"]
 
-
-def w(tag: str) -> str:
-    """Return the Clark-notation qualified name for a ``w:`` local name."""
-    return f"{{{W_NS}}}{tag}"
-
-
-def _local_name(tag) -> str:
-    """Return the local name of an lxml tag, robust to non-string tags."""
-    if not isinstance(tag, str):
-        return ""
-    return tag.rsplit("}", 1)[-1]
+w = make_qn("w")
 
 
 # Multilingual "contents" words (EN/IT/FR/DE/ES). Lowercased; matched against the
@@ -493,26 +489,23 @@ def _toc_field_begins(children: list) -> list[dict]:
     for i, ch in enumerate(children):
         if _is_sectpr(ch):
             continue
-        for el in ch.iter(w("fldChar"), w("instrText")):
-            ln = _local_name(el.tag)
-            if ln == "fldChar":
-                ctype = el.get(w("fldCharType"))
-                if ctype == "begin":
-                    stack.append({"begin_owner": i, "instr": ""})
-                elif ctype == "end":
-                    if stack:
-                        frame = stack.pop()
-                        instr = frame.get("instr", "").strip()
-                        if instr.startswith(TOC_INSTR_PREFIX):
-                            out.append(
-                                {
-                                    "begin_index": frame.get("begin_owner"),
-                                    "end_index": i,
-                                    "instr": instr,
-                                    "seq_id": _toc_seq_id(instr),
-                                }
-                            )
-            elif ln == "instrText":
+        for kind, el in iter_complex_field_events(ch):
+            if kind == "begin":
+                stack.append({"begin_owner": i, "instr": ""})
+            elif kind == "end":
+                if stack:
+                    frame = stack.pop()
+                    instr = frame.get("instr", "").strip()
+                    if instr.startswith(TOC_INSTR_PREFIX):
+                        out.append(
+                            {
+                                "begin_index": frame.get("begin_owner"),
+                                "end_index": i,
+                                "instr": instr,
+                                "seq_id": _toc_seq_id(instr),
+                            }
+                        )
+            elif kind == "instr":
                 if stack:
                     stack[-1]["instr"] += el.text or ""
     # Order by the begin child index so the surfaced ids are stable.
@@ -1050,16 +1043,13 @@ def refresh_toc(doc) -> int:
     marked = 0
     body = doc.element.body
     stack: list = []  # stack of begin fldChar elements (innermost on top)
-    for el in body.iter(w("fldChar"), w("instrText")):
-        ln = _local_name(el.tag)
-        if ln == "fldChar":
-            ctype = el.get(w("fldCharType"))
-            if ctype == "begin":
-                stack.append(el)
-            elif ctype == "end":
-                if stack:
-                    stack.pop()
-        elif ln == "instrText":
+    for kind, el in iter_complex_field_events(body):
+        if kind == "begin":
+            stack.append(el)
+        elif kind == "end":
+            if stack:
+                stack.pop()
+        elif kind == "instr":
             text = (el.text or "").strip()
             if stack and text.startswith(TOC_INSTR_PREFIX):
                 begin = stack[-1]
@@ -1121,15 +1111,12 @@ def _outline_toc_instruction(el) -> Optional[str]:
     """
     stack: list[str] = []
     candidates: list[str] = []
-    for node in el.iter(w("fldChar"), w("instrText")):
-        ln = _local_name(node.tag)
-        if ln == "fldChar":
-            ctype = node.get(w("fldCharType"))
-            if ctype == "begin":
-                stack.append("")
-            elif ctype == "end" and stack:
-                candidates.append(stack.pop())
-        elif ln == "instrText" and stack:
+    for kind, node in iter_complex_field_events(el):
+        if kind == "begin":
+            stack.append("")
+        elif kind == "end" and stack:
+            candidates.append(stack.pop())
+        elif kind == "instr" and stack:
             stack[-1] += node.text or ""
     # Outermost-first for any field still open (end in a later body child).
     candidates.extend(stack)

@@ -40,23 +40,19 @@ from typing import Optional
 
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
+from brandkit.ooxml.names import local_name as _local_name
+
 # ---------------------------------------------------------------------------
 # Namespaces. The presentation section list is a Microsoft 2010 extension that
 # python-pptx does not model; we read it off the raw lxml tree (peer of how docx
-# structure walks ``w:sdt`` / ``w:instrText`` the high-level API hides).
+# structure walks ``w:sdt`` / ``w:instrText`` the high-level API hides). The
+# ``_local_name`` helper comes from the shared :mod:`brandkit.ooxml.names` layer.
 # ---------------------------------------------------------------------------
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 P14_NS = "http://schemas.microsoft.com/office/powerpoint/2010/main"
 # The frozen URI of the section-list extension (ECMA/MS-PPTX). This is a FORMAT
 # constant, never a brand word.
 SECTION_EXT_URI = "{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"
-
-
-def _local_name(tag) -> str:
-    """Return the local name of an lxml/string tag, robust to non-string tags."""
-    if not isinstance(tag, str):
-        return ""
-    return tag.rsplit("}", 1)[-1]
 
 
 # ---------------------------------------------------------------------------

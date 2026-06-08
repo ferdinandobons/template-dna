@@ -227,5 +227,54 @@ class ComponentSurvivalCheckTest(unittest.TestCase):
         self.assertEqual(cd.check_component_survival(None, _XLSX, profile), [])
 
 
+class NoNetStructureLossFloorTest(unittest.TestCase):
+    """The destructive-floor backstop re-verifies the confidence floor when the
+    caller threads ``confidence`` (additive: ``None`` skips the re-check)."""
+
+    def _profile_with_demo(self, *, confidence: float | None) -> dict:
+        comp_block = {
+            "status": schema.ComprehensionStatus.PRESENT.value,
+            "demo_classification": {
+                "regions": [{"region_ref": "region.r1", "verdict": "demo"}]
+            },
+        }
+        if confidence is not None:
+            comp_block["confidence"] = confidence
+        return {"comprehension": comp_block}
+
+    def test_unsanctioned_removal_is_error_regardless_of_confidence(self) -> None:
+        # A ref with NO corroborated verdict is an ERROR even at high confidence.
+        profile = self._profile_with_demo(confidence=0.9)
+        findings = cd.check_no_net_structure_loss(
+            {"region.unknown"}, profile, confidence=0.9
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, schema.Severity.ERROR.value)
+        self.assertIn("without a corroborated", findings[0].message)
+
+    def test_sanctioned_removal_below_floor_is_error(self) -> None:
+        # A ref WITH a corroborated demo verdict is still an ERROR when the threaded
+        # confidence is below the floor (the reconcile site should have downgraded it).
+        profile = self._profile_with_demo(confidence=0.3)
+        findings = cd.check_no_net_structure_loss(
+            {"region.r1"}, profile, confidence=0.3
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].severity, schema.Severity.ERROR.value)
+        self.assertIn("below the destructive", findings[0].message)
+
+    def test_sanctioned_removal_above_floor_passes(self) -> None:
+        profile = self._profile_with_demo(confidence=0.9)
+        self.assertEqual(
+            cd.check_no_net_structure_loss({"region.r1"}, profile, confidence=0.9), []
+        )
+
+    def test_confidence_none_skips_floor_recheck(self) -> None:
+        # Back-compat: without a threaded confidence the floor re-check is skipped,
+        # so a sanctioned removal passes even though the stored confidence is low.
+        profile = self._profile_with_demo(confidence=0.1)
+        self.assertEqual(cd.check_no_net_structure_loss({"region.r1"}, profile), [])
+
+
 if __name__ == "__main__":
     unittest.main()

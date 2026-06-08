@@ -37,6 +37,15 @@ from typing import Any, Optional
 SCHEMA_VERSION: str = "1.2.0"
 SCHEMA_ID: str = "https://brand-docs/schema/profile-1.json"
 
+# The newest MAJOR version this reader understands. The schema's contract is
+# "additive forever within a major": any 1.x profile - older or newer MINOR -
+# is readable by a 1.x reader because every cross-minor change only adds
+# optional keys (an absent key is its documented default). A bump to MAJOR 2
+# would signal a breaking reshape, which a 1.x reader must refuse cleanly
+# rather than mis-parse. :func:`validate` enforces this floor; :func:`migrate`
+# is the forward hook a future reader would grow into.
+SUPPORTED_MAJOR: int = 1
+
 # The comprehension sub-block carries its own independent schema tag so the
 # model-facing contract can evolve without re-versioning the whole envelope.
 COMPREHENSION_SCHEMA_VERSION: str = "comprehension-1"
@@ -458,8 +467,19 @@ def validate(profile: dict) -> list[str]:
 
     # schema_version (semver-ish, only the X.Y.Z shape is enforced here).
     sv = profile.get("schema_version")
-    if sv is not None and not re.match(r"^\d+\.\d+\.\d+", str(sv)):
-        problems.append(f"schema_version: not semver: {sv!r}")
+    if sv is not None:
+        m = re.match(r"^(\d+)\.\d+\.\d+", str(sv))
+        if not m:
+            problems.append(f"schema_version: not semver: {sv!r}")
+        elif int(m.group(1)) > SUPPORTED_MAJOR:
+            # A newer MAJOR is a breaking reshape this reader cannot trust. Return
+            # the single actionable message NOW instead of letting the foreign
+            # shape scatter a pile of confusing per-field enum errors below.
+            return [
+                f"schema_version {sv!r} has major {int(m.group(1))} newer than this "
+                f"reader supports (max {SUPPORTED_MAJOR}); upgrade brand-docs or "
+                f"re-extract the template"
+            ]
 
     # kind discriminator
     kind = profile.get("kind")
@@ -502,6 +522,16 @@ def validate(profile: dict) -> list[str]:
     # this structural validator's). NEVER required.
     problems.extend(_validate_comprehension(profile.get("comprehension")))
 
+    # components / sections reusable-fragment registries. Each entry must be a dict
+    # carrying a ``blocks`` list (the primitive template ``expand_components``
+    # inlines). Shape-only - the block CONTENTS are enforced by ``block_from_dict``
+    # at expansion time, not duplicated here. A malformed entry is surfaced now
+    # (fail-closed) rather than blowing up later inside the expander.
+    problems.extend(
+        _validate_fragment_registry(profile.get("components"), "components")
+    )
+    problems.extend(_validate_fragment_registry(profile.get("sections"), "sections"))
+
     # surface must contain exactly the one kind sub-block.
     surface = profile.get("surface")
     if isinstance(surface, dict) and kind is not None:
@@ -538,6 +568,28 @@ def validate(profile: dict) -> list[str]:
     problems.extend(_validate_resolver_consistency(profile, kind))
 
     return problems
+
+
+def migrate(profile: dict) -> dict:
+    """Bring a loaded ``profile`` dict up to the reader's current schema.
+
+    The schema's contract is **additive forever within a major**: across MINOR
+    versions a profile only ever *gains* optional keys, and an absent key is
+    always its documented default. A reader of MAJOR ``SUPPORTED_MAJOR`` can
+    therefore consume any ``SUPPORTED_MAJOR``.x profile - older or newer MINOR -
+    without rewriting it, which is why this is the **identity** today: it returns
+    the profile unchanged.
+
+    This function exists as the documented forward seam. Real cross-major
+    migration (a MAJOR 1 -> 2 reshape, only ever reached for profiles whose major
+    is <= :data:`SUPPORTED_MAJOR`) would live here, branching on
+    ``profile["schema_version"]``. Profiles whose major is *newer* than this
+    reader never reach migration - :func:`validate` refuses them with a single
+    clear message first. Wiring this into the load path (see
+    ``store.load_profile``) is behaviour-identical while the body is identity, so
+    callers can adopt the seam now and gain real migration for free later.
+    """
+    return profile
 
 
 def _validate_resolver_consistency(profile: dict, kind: Optional[str]) -> list[str]:
@@ -940,6 +992,33 @@ def _validate_comp_sections(sections: Any) -> list[str]:
             val = sec.get(attr)
             if val is not None and not isinstance(val, bool):
                 problems.append(f"{path}.{attr}: must be a bool or null, got {val!r}")
+    return problems
+
+
+def _validate_fragment_registry(registry: Any, key: str) -> list[str]:
+    """Validate a reusable-fragment registry (``components`` / ``sections``).
+
+    Well-formedness only: the registry must be a map whose every entry is a dict
+    carrying a ``blocks`` list (the primitive template ``expand_components`` inlines
+    when an idoc references the entry by id). The block CONTENTS are not re-checked
+    here - ``block_from_dict`` enforces those at expansion time; over-constraining
+    them would duplicate that contract. Absent / empty is fine (the default).
+    ``slots`` PARAMETERIZATION and auto-POPULATION of these registries remain
+    deferred, so nothing beyond ``blocks`` is required.
+    """
+    if registry is None:
+        return []
+    if not isinstance(registry, dict):
+        return [f"{key}: must be an object mapping ref -> fragment definition"]
+    problems: list[str] = []
+    for ref, definition in registry.items():
+        path = f"{key}.{ref}"
+        if not isinstance(definition, dict):
+            problems.append(f"{path}: must be an object")
+            continue
+        blocks = definition.get("blocks")
+        if not isinstance(blocks, list):
+            problems.append(f"{path}.blocks: required list of block definitions")
     return problems
 
 

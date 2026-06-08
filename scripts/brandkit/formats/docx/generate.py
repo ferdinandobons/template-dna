@@ -15,7 +15,9 @@ from brandkit.formats.docx import cover, structure
 from brandkit.formats.docx.styles import lookup_style
 from brandkit.ir import components
 from brandkit.ir import model as ir
+from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
+from brandkit.profile.reconcile import confidence_clears_floor
 from brandkit.profile.resolver import ProfileResolver
 from brandkit.qa.checks_deterministic import (
     check_index_matches_content,
@@ -102,16 +104,27 @@ def generate(
     structure.refresh_toc(doc)
 
     # Destructive-action floor (plan §6): every cover anchor / index block the
-    # reconciliation removed must carry a corroborated destructive verdict, else
-    # ERROR (a wrong delete is not recoverable). Model-free; reads frozen verdicts.
+    # reconciliation removed must carry a corroborated destructive verdict AND clear
+    # the confidence floor, else ERROR (a wrong delete is not recoverable). Model-free;
+    # reads frozen verdicts. The confidence threaded here is the model's single
+    # comprehension confidence (the same value the reconcile sites gate on).
     if store.comprehension_is_present(profile):
+        comp = profile.get("comprehension")
+        confidence = (
+            float(comp.get("confidence") or 0.0) if isinstance(comp, dict) else None
+        )
         sink.extend(
-            check_no_net_structure_loss(cleared_anchors | removed_refs, profile)
+            check_no_net_structure_loss(
+                cleared_anchors | removed_refs, profile, confidence=confidence
+            )
         )
 
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(out)
+    # python-docx's core.xml is already stable, so only the ZIP entry timestamps
+    # need normalizing for byte-idempotent re-runs (no modified<-created pin).
+    repack_fixed_timestamps(out)
     return out
 
 
@@ -169,6 +182,9 @@ def _reconcile_indexes_and_demo(
         return set()
 
     has_captionables = _content_has_captionables(idoc)
+    # The model's single comprehension confidence - the SAME value the cover
+    # reconciler gates on - so a CLEAR is honored uniformly across formats.
+    confidence = float(comp.get("confidence") or 0.0)
     demo_region_refs = {
         r.get("region_ref")
         for r in (comp.get("demo_classification") or {}).get("regions") or []
@@ -187,9 +203,22 @@ def _reconcile_indexes_and_demo(
             continue
         if idx.get("reconcile") != schema.Reconcile.CLEAR.value:
             continue  # regenerate / preserve: keep (refresh handles the outline TOC)
-        # Destructive floor: a CLEAR is honored only with deterministic corroboration
-        # - the model also tagged the index's region demo, or the content has no
-        # captionable item the index could point at.
+        # Destructive floor: a CLEAR is honored only when (i) the model's confidence
+        # clears the floor AND (ii) determinism corroborates the removal - the model
+        # also tagged the index's region demo, or the content has no captionable item
+        # the index could point at. Either gate failing downgrades to KEEP + WARNING
+        # (a wrong delete is unrecoverable). The confidence gate mirrors the cover
+        # reconcilers so the SAME confidence yields the SAME behavior per format.
+        if not confidence_clears_floor(confidence):
+            findings.append(
+                Finding(
+                    "index_clear_downgraded",
+                    schema.Severity.WARNING.value,
+                    f"index {index_ref!r} clear not corroborated "
+                    f"(confidence {confidence:.2f}); kept",
+                )
+            )
+            continue
         region_ref = f"region.{index_ref}"
         corroborated = (region_ref in demo_region_refs) or (not has_captionables)
         if not corroborated:

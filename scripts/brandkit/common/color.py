@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from brandkit.ooxml.names import qname
+
 try:  # lxml is a hard dependency, but keep parse helpers import-safe.
     from lxml import etree as _etree
 except Exception:  # pragma: no cover - exercised only in degraded envs
@@ -69,7 +71,7 @@ A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 def _a(tag: str) -> str:
     """Clark-notation qualified name for an ``a:`` (DrawingML) local name."""
-    return f"{{{A_NS}}}{tag}"
+    return qname(A_NS, tag)
 
 
 # ---------------------------------------------------------------------------

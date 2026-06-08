@@ -69,6 +69,36 @@ class SchemaAdditiveTest(unittest.TestCase):
     def test_version_bumped(self):
         self.assertEqual(schema.SCHEMA_VERSION, "1.2.0")
 
+    def test_current_major_profile_validates_clean(self):
+        # A normal 1.2.0 profile passes the major floor and validates clean.
+        prof = schema.build_envelope("docx", {"name": "t"})
+        self.assertEqual(prof["schema_version"], "1.2.0")
+        self.assertEqual(schema.validate(prof), [])
+
+    def test_newer_major_is_a_single_clear_error(self):
+        # A future MAJOR (2.0.0) must short-circuit to ONE actionable message,
+        # not a scatter of per-field enum errors from the rest of validate().
+        prof = schema.build_envelope("docx", {"name": "t"})
+        prof["schema_version"] = "2.0.0"
+        problems = schema.validate(prof)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("major", problems[0])
+        self.assertIn("2.0.0", problems[0])
+        self.assertIn(str(schema.SUPPORTED_MAJOR), problems[0])
+
+    def test_supported_major_boundary(self):
+        # The floor is exclusive: the supported major itself is fine; the next
+        # one up is refused.
+        prof = schema.build_envelope("docx", {"name": "t"})
+        prof["schema_version"] = f"{schema.SUPPORTED_MAJOR}.99.99"
+        self.assertEqual(schema.validate(prof), [])
+        prof["schema_version"] = f"{schema.SUPPORTED_MAJOR + 1}.0.0"
+        self.assertEqual(len(schema.validate(prof)), 1)
+
+    def test_migrate_is_identity_today(self):
+        prof = schema.build_envelope("pptx", {"name": "t"})
+        self.assertEqual(schema.migrate(prof), prof)
+
     def test_absent_comprehension_is_valid(self):
         prof = schema.build_envelope("docx", {"name": "t"})
         self.assertEqual(prof["comprehension"]["status"], "absent")

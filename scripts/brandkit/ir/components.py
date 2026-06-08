@@ -31,6 +31,14 @@ def expand_components(
     / ``profile["sections"][ref]["blocks"]``). Expansion is recursive (a section
     may contain components). When a ref is undefined the call raises
     :class:`ComponentExpansionError` so the missing fragment is loud, not dropped.
+
+    Both IID legs route through here (docx and pptx ``generate`` call this at the
+    top), so a profile-defined fragment expands identically across formats. Scope:
+    this is the STATIC, profile-defined expansion only. Two stories remain DEFERRED
+    milestones and are intentionally out of scope here: (1) auto-POPULATING the
+    registries (extraction / comprehend-time detection of reusable fragments), and
+    (2) ``slots`` PARAMETERIZATION (the block's ``slots`` are not yet substituted
+    into the template - the template is inlined verbatim).
     """
     components = profile.get("components") or {}
     sections = profile.get("sections") or {}

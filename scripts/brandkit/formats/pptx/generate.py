@@ -58,8 +58,11 @@ from pptx.enum.shapes import PP_PLACEHOLDER
 
 from brandkit.common import text as textutil
 from brandkit.formats.pptx import structure
+from brandkit.ir import components
 from brandkit.ir import model as ir
+from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
+from brandkit.profile.reconcile import confidence_clears_floor
 from brandkit.profile.resolver import ProfileResolver
 from brandkit.qa.checks_deterministic import check_no_net_structure_loss
 from brandkit.qa.model import Finding
@@ -119,6 +122,15 @@ def generate(
     regenerates the agenda from the new headings).
     """
     sink: list[Finding] = findings if findings is not None else []
+    # Expand reusable-fragment refs to primitives BEFORE resolution, mirroring the
+    # docx leg (docx/generate.py): a component/section block names a profile
+    # ``components``/``sections`` registry entry and is replaced in place by that
+    # entry's primitive sub-blocks. An undefined ref RAISES ``ComponentExpansionError``
+    # (loud, fail-closed) - symmetric with docx, so missing content is never silently
+    # dropped. NOTE: registry POPULATION (auto-detect / comprehend-time fragment
+    # detection) and ``slots`` PARAMETERIZATION remain DEFERRED milestones; this wires
+    # only the static, profile-defined expansion plumbing.
+    idoc = components.expand_components(idoc, profile)
     prs = Presentation(shell_path)
     resolver = ProfileResolver(profile)
 
@@ -126,13 +138,25 @@ def generate(
     content_layout = _layout_for_role(prs, resolver, "heading.1") or _layout_for_role(
         prs, resolver, "paragraph"
     )
+    # The body placeholder index the profile resolved for body content (the
+    # ``paragraph`` role's ``ph_idx``, ph_type ``body``). Body-placeholder
+    # selection PREFERS this named idx over the positional first body placeholder,
+    # so the schema's resolved ``ph_idx`` is honored (it only differs from "first"
+    # on a multi-body layout). None when the role is a stub / names no idx, in
+    # which case the positional fallback applies - the brand guarantee never
+    # fabricates a placeholder.
+    body_ph_idx = _body_ph_idx(resolver)
 
     shell_components = structure.inventory_components(prs)
 
     if store.comprehension_is_present(profile):
-        _generate_reconciled(prs, profile, idoc, cover_layout, content_layout, sink)
+        _generate_reconciled(
+            prs, profile, idoc, cover_layout, content_layout, body_ph_idx, sink
+        )
     else:
-        _generate_deterministic(prs, profile, idoc, cover_layout, content_layout, sink)
+        _generate_deterministic(
+            prs, profile, idoc, cover_layout, content_layout, body_ph_idx, sink
+        )
 
     # Component-survival check (plan CC-3(b)): a native table/chart/picture present
     # in the shell that has no counterpart in the output is WARNed, so a deck that
@@ -148,42 +172,10 @@ def generate(
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     prs.save(out)
-    _normalize_for_idempotency(out)
+    # ``dcterms:modified`` is already pinned above, so only the ZIP entry
+    # timestamps need normalizing for byte-idempotent re-runs.
+    repack_fixed_timestamps(out)
     return out
-
-
-def _normalize_for_idempotency(path: Path) -> None:
-    """Re-zip the saved pptx with a FIXED entry timestamp so two identical
-    generations are byte-identical (the pptx peer of the xlsx idempotency fix).
-
-    python-pptx stamps the wall clock into every ZIP entry header at save time; the
-    package ``dcterms:modified`` is already pinned (see ``_PINNED_MODIFIED``), so
-    only the ZIP timestamps remain non-deterministic and can make two near-identical
-    generations differ by a byte when they straddle the DOS-time 2-second boundary.
-    This rewrites the archive with the same ``(1980,1,1,0,0,0)`` timestamp
-    ``ooxml.pack`` uses, preserving part bytes and order. A rewrite failure is
-    tolerated and never corrupts the file: the already-saved package stays in place.
-    """
-    import zipfile
-
-    try:
-        with zipfile.ZipFile(path, "r") as zin:
-            names = zin.namelist()
-            parts = {name: zin.read(name) for name in names}
-    except (OSError, zipfile.BadZipFile):
-        return
-
-    fixed_date = (1980, 1, 1, 0, 0, 0)
-    try:
-        tmp = path.with_name(path.name + ".tmp")
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-            for name in names:  # preserve part order so the central directory is stable
-                info = zipfile.ZipInfo(name, date_time=fixed_date)
-                info.compress_type = zipfile.ZIP_DEFLATED
-                zout.writestr(info, parts[name])
-        tmp.replace(path)
-    except OSError:
-        return
 
 
 def _check_component_survival(before: dict, after: dict) -> list[Finding]:
@@ -214,7 +206,7 @@ def _check_component_survival(before: dict, after: dict) -> list[Finding]:
 # Deterministic path (comprehension ABSENT) - today's behavior, byte-identical
 # ---------------------------------------------------------------------------
 def _generate_deterministic(
-    prs, profile: dict, idoc, cover_layout, content_layout, sink: list
+    prs, profile: dict, idoc, cover_layout, content_layout, body_ph_idx, sink: list
 ) -> None:
     """Blind rebuild: clear all slides, build cover + one content slide per heading.
 
@@ -240,14 +232,14 @@ def _generate_deterministic(
             if sub is not None:
                 _set_placeholder_text(sub, textutil.runs_to_text(idoc.cover.subtitle))
 
-    _append_content_slides(prs, profile, idoc, content_layout, sink)
+    _append_content_slides(prs, profile, idoc, content_layout, body_ph_idx, sink)
 
 
 # ---------------------------------------------------------------------------
 # Reconcile path (comprehension PRESENT) - keep structural, fill cover, regen agenda
 # ---------------------------------------------------------------------------
 def _generate_reconciled(
-    prs, profile: dict, idoc, cover_layout, content_layout, sink: list
+    prs, profile: dict, idoc, cover_layout, content_layout, body_ph_idx, sink: list
 ) -> None:
     """Reconcile the preserved deck with the new content (plan §6).
 
@@ -270,18 +262,27 @@ def _generate_reconciled(
     removed_region_refs = _clear_demo_slides(prs, comp, sink)
 
     # 3) Append the new body content after the kept slides.
-    _append_content_slides(prs, profile, idoc, content_layout, sink)
+    _append_content_slides(prs, profile, idoc, content_layout, body_ph_idx, sink)
 
     # 4) Regenerate the agenda / section-list index from the NEW headings (the PPTX
     # peer of refreshing the docx outline TOC). No-op when the deck has no section
     # list / the convention is preserve.
-    _regenerate_agenda(prs, comp, idoc, content_layout, sink)
+    _regenerate_agenda(prs, comp, idoc, content_layout, body_ph_idx, sink)
 
     # 5) Destructive-action floor (plan §6): every cover anchor / region the
-    # reconciliation removed must carry a corroborated destructive verdict, else
-    # ERROR. Model-free; reads the frozen verdicts.
+    # reconciliation removed must carry a corroborated destructive verdict AND clear
+    # the confidence floor, else ERROR. Model-free; reads the frozen verdicts. Both
+    # pptx reconcile sites now gate on the floor (_fill_cover_in_place and
+    # _clear_demo_slides), uniform with the docx/xlsx sites, so the confidence is
+    # threaded into the backstop to re-verify every sanctioned removal also cleared
+    # it. confidence is the model's single comprehension value.
+    confidence = (
+        float(comp.get("confidence") or 0.0) if isinstance(comp, dict) else None
+    )
     sink.extend(
-        check_no_net_structure_loss(cleared_anchors | removed_region_refs, profile)
+        check_no_net_structure_loss(
+            cleared_anchors | removed_region_refs, profile, confidence=confidence
+        )
     )
 
 
@@ -367,6 +368,12 @@ def _clear_demo_slides(prs, comp: dict, sink: list) -> set[str]:
     if not demo_refs:
         return set()
     det_demo = set(structure.demo_slide_indices(prs))
+    # Destructive confidence floor (uniform with the docx/xlsx reconcile sites and
+    # the cover sites): a demo-slide removal is honored only when the model's
+    # confidence clears the floor. Below it, KEEP + WARNING (a wrong delete is not
+    # recoverable). confidence is the single top-level comprehension value.
+    confidence = float(comp.get("confidence") or 0.0)
+    floor_ok = confidence_clears_floor(confidence)
     removed: set[str] = set()
     # Resolve refs to slide elements FIRST (removing one shifts indices), then drop.
     sld_id_lst = prs.slides._sldIdLst
@@ -386,6 +393,16 @@ def _clear_demo_slides(prs, comp: dict, sink: list) -> set[str]:
                 )
             )
             continue
+        if not floor_ok:
+            sink.append(
+                Finding(
+                    "demo_clear_downgraded",
+                    schema.Severity.WARNING.value,
+                    f"slide region {ref!r} clear below the destructive confidence "
+                    f"floor (confidence {confidence:.2f}); kept",
+                )
+            )
+            continue
         to_remove.append((ref, sld_ids[idx]))
     for ref, sld_id in to_remove:
         r_id = sld_id.rId
@@ -395,7 +412,9 @@ def _clear_demo_slides(prs, comp: dict, sink: list) -> set[str]:
     return removed
 
 
-def _regenerate_agenda(prs, comp: dict, idoc, content_layout, sink: list) -> None:
+def _regenerate_agenda(
+    prs, comp: dict, idoc, content_layout, body_ph_idx, sink: list
+) -> None:
     """Regenerate the agenda / section-list index from the NEW headings.
 
     For each ``conventions.indexes`` entry whose ``reconcile == regenerate`` and
@@ -430,11 +449,11 @@ def _regenerate_agenda(prs, comp: dict, idoc, content_layout, sink: list) -> Non
         if not headings:
             continue
         new_body = "\n".join(headings)
-        existing = _existing_agenda_slide(prs)
+        existing = _existing_agenda_slide(prs, body_ph_idx)
         if existing is not None:
             # Refresh IN PLACE: keep the title (author's word, language) + run
             # formatting; rewrite only the section-list body to the new headings.
-            body = _first_body_placeholder(existing)
+            body = _body_placeholder(existing, body_ph_idx)
             if body is not None:
                 _set_placeholder_text(body, new_body)
         else:
@@ -442,7 +461,7 @@ def _regenerate_agenda(prs, comp: dict, idoc, content_layout, sink: list) -> Non
             slide = prs.slides.add_slide(layout)
             # No agenda slide shipped: leave the layout's default (empty) title rather
             # than inject a literal; fill the body with the new section list.
-            body = _first_body_placeholder(slide)
+            body = _body_placeholder(slide, body_ph_idx)
             if body is not None:
                 body.text = new_body
         sink.append(
@@ -454,7 +473,7 @@ def _regenerate_agenda(prs, comp: dict, idoc, content_layout, sink: list) -> Non
         )
 
 
-def _existing_agenda_slide(prs):
+def _existing_agenda_slide(prs, body_ph_idx: Optional[int] = None):
     """Return the deck's existing agenda / section-list slide, or None.
 
     The agenda slide is identified STRUCTURALLY, never by a fixed word: it is the
@@ -465,6 +484,11 @@ def _existing_agenda_slide(prs):
     authored in. Its title (e.g. "Sommario" / "Übersicht" / "Agenda") and formatting
     are preserved when the agenda is refreshed - the PPTX peer of ``refresh_toc``
     preserving the docx TOC heading.
+
+    The body is read through the SAME ``body_ph_idx``-aware selection the refresh
+    write path uses (:func:`_body_placeholder`), so detection and rewrite target the
+    identical placeholder on a multi-body layout (falls back to the first body
+    placeholder when no idx is named - identical to before on single-body layouts).
 
     Returns None when the deck ships no such slide (caller appends a fresh one with
     no fabricated title rather than carrying a literal).
@@ -479,7 +503,7 @@ def _existing_agenda_slide(prs):
     for slide in prs.slides:
         if slide.shapes.title is None:
             continue
-        body = _first_body_placeholder(slide)
+        body = _body_placeholder(slide, body_ph_idx)
         if body is None or not getattr(body, "has_text_frame", False) or not body.text:
             continue
         lines = [ln.strip() for ln in body.text.splitlines() if ln.strip()]
@@ -492,13 +516,17 @@ def _existing_agenda_slide(prs):
 # Shared content-slide builder (both paths append body content the same way)
 # ---------------------------------------------------------------------------
 def _append_content_slides(
-    prs, profile: dict, idoc, content_layout, sink: list
+    prs, profile: dict, idoc, content_layout, body_ph_idx, sink: list
 ) -> None:
     """Append one content slide per IR heading-section (capacity-split).
 
     Body lines are written as REAL body-placeholder paragraphs (one per line), each
     carrying its ``BodyLine.indent`` as ``paragraph.level`` so the layout's own list
     formatting supplies the bullet/indentation - never a string-joined body blob.
+
+    The body placeholder is chosen by the profile-resolved ``body_ph_idx`` when the
+    slide carries that index (the schema's source of truth), falling back to the
+    positional first body placeholder only when no named idx is present.
     """
     capacity = _body_capacity(profile)
     layout = content_layout or prs.slide_layouts[0]
@@ -511,7 +539,7 @@ def _append_content_slides(
                 title = f"{title} ({page + 1})"
             if slide.shapes.title is not None:
                 slide.shapes.title.text = title
-            body = _first_body_placeholder(slide)
+            body = _body_placeholder(slide, body_ph_idx)
             if chunk.table is not None:
                 _clear_body_placeholder(body)
                 _add_native_table(slide, prs, chunk.table, body)
@@ -686,6 +714,23 @@ def _layout_by_name(prs, name: str):
     return None
 
 
+def _body_ph_idx(resolver: ProfileResolver) -> Optional[int]:
+    """Return the placeholder idx the profile resolved for body content.
+
+    Routes through the shared :class:`ProfileResolver`: the ``paragraph`` role's
+    ``placeholder`` op carries ``ph_idx`` (ph_type ``body``) read verbatim from the
+    profile's real roles. This is the named index body content must target.
+    Returns None when the role is a stub (no idx) or the resolver carries none, in
+    which case body-placeholder selection falls back to the positional first body
+    placeholder - the brand guarantee never fabricates an index.
+    """
+    op = resolver.resolve_role("paragraph", fallback=None)
+    if not op.resolver:
+        return None
+    ph_idx = op.resolver.get("ph_idx")
+    return ph_idx if isinstance(ph_idx, int) else None
+
+
 # ---------------------------------------------------------------------------
 # Cover-anchor / placeholder helpers (reconcile path)
 # ---------------------------------------------------------------------------
@@ -723,7 +768,17 @@ def _placeholder_for_anchor(slide, anchor_ref: str):
     ``slide`` whose ``placeholder_format.idx`` matches. Returns None when the slide
     has no such placeholder (defensive).
     """
-    ph_idx = _anchor_ph_idx(anchor_ref)
+    return _placeholder_by_idx(slide, _anchor_ph_idx(anchor_ref))
+
+
+def _placeholder_by_idx(slide, ph_idx: Optional[int]):
+    """Return the placeholder on ``slide`` whose ``placeholder_format.idx`` matches.
+
+    The stable, idx-based selection shared by the cover-anchor path
+    (:func:`_placeholder_for_anchor`) and the body-content path
+    (:func:`_body_placeholder`). Returns None when ``ph_idx`` is None or the slide
+    carries no placeholder with that index (defensive - never fabricates one).
+    """
     if ph_idx is None:
         return None
     for shape in slide.placeholders:
@@ -779,12 +834,6 @@ def _cover_content_for(cover: ir.Cover, binds_to: Optional[str]) -> Optional[str
     return str(val) if val not in (None, "") else None
 
 
-# Below this confidence a DESTRUCTIVE cover CLEAR is downgraded to KEEP + WARNING.
-# Additive FILL is never gated on confidence (a wrong fill is recoverable; a wrong
-# delete is not - the destructive-action floor, plan §6). Mirrors the docx floor.
-_DESTRUCTIVE_CONFIDENCE_FLOOR: float = 0.5
-
-
 def _clear_is_corroborated(ph, slot: dict, confidence: float) -> bool:
     """Destructive-action floor for a cover CLEAR (plan §6).
 
@@ -793,7 +842,7 @@ def _clear_is_corroborated(ph, slot: dict, confidence: float) -> bool:
     placeholder text equals the captured ``demo_value`` (or the placeholder is
     empty). Both conditions required; otherwise the slot is kept.
     """
-    if confidence < _DESTRUCTIVE_CONFIDENCE_FLOOR:
+    if not confidence_clears_floor(confidence):
         return False
     live = ph.text.strip() if getattr(ph, "has_text_frame", False) and ph.text else ""
     if not live:
@@ -916,22 +965,43 @@ def _body_lines(blocks: list, sink: list) -> list[BodyLine]:
                 else (block.alt or ""),
             )
             _degrade(sink, "image")
-        # Divider / Component / Section / Toc carry no body text here.
+        elif isinstance(block, (ir.Component, ir.Section)):
+            # Defensive / unreachable from ``generate()``: reusable-fragment refs are
+            # now expanded pre-resolve on BOTH legs (``components.expand_components``
+            # is wired at the top of pptx ``generate`` exactly as in docx), so a
+            # defined ref becomes primitives and an undefined ref RAISES upstream -
+            # neither reaches here. The branch is kept so a direct ``_body_lines``
+            # caller still surfaces the unexpanded ref rather than dropping it.
+            _degrade(sink, block.TYPE, note=_NOT_RENDERED)
+        elif isinstance(block, (ir.Toc, ir.Divider)):
+            # Structural markers with no pptx primitive in this engine. A deck uses
+            # an agenda/section-list slide for navigation, not a Word-style TOC;
+            # surface the unrendered block rather than dropping it silently.
+            _degrade(sink, block.TYPE, note=_NOT_RENDERED)
     return lines
 
 
-def _degrade(sink: list, kind: str) -> None:
-    """Record a ``block_degraded`` WARNING for a native block flattened to text.
+_NOT_RENDERED = "not rendered in pptx (no native writer)"
+
+
+def _degrade(
+    sink: list,
+    kind: str,
+    *,
+    note: str = "flattened to body text in pptx (native writer deferred)",
+) -> None:
+    """Record a ``block_degraded`` WARNING for a block pptx cannot author natively.
 
     Mirrors the docx vertical's loud degradation so a deck that down-renders a
-    native chart/SmartArt/KPI/image to a textual stand-in is visible in QA
+    native chart/SmartArt/KPI/image to a textual stand-in - or drops a block type
+    pptx has no writer for at all (``note=_NOT_RENDERED``) - is visible in QA
     rather than silently lost. The native writers themselves are DEFERRED.
     """
     sink.append(
         Finding(
             "block_degraded",
             schema.Severity.WARNING.value,
-            f"{kind!r} block flattened to body text in pptx (native writer deferred)",
+            f"{kind!r} block {note}",
         )
     )
 
@@ -1043,3 +1113,20 @@ def _first_body_placeholder(slide):
         if shape != slide.shapes.title:
             return shape
     return None
+
+
+def _body_placeholder(slide, ph_idx: Optional[int]):
+    """Return the body placeholder, PREFERRING the profile-resolved ``ph_idx``.
+
+    Honors the schema's source of truth: when the slide carries the placeholder the
+    profile resolved for body content (its ``placeholder_format.idx`` equals
+    ``ph_idx``), that one is used. Falls back to the positional first body
+    placeholder when no idx is named OR the named idx is absent from this slide -
+    so the brand guarantee holds (never fabricate a placeholder) while a multi-body
+    layout writes into the NAMED body, not merely the first one. For a single-body
+    layout the named idx IS the first body placeholder, so behavior is unchanged.
+    """
+    named = _placeholder_by_idx(slide, ph_idx)
+    if named is not None and named != slide.shapes.title:
+        return named
+    return _first_body_placeholder(slide)

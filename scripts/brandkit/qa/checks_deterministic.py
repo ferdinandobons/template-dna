@@ -13,6 +13,7 @@ from pptx import Presentation
 from brandkit.common import text as textutil
 from brandkit.profile import comprehension as comprehensionmod
 from brandkit.profile import schema
+from brandkit.profile.reconcile import confidence_clears_floor
 from brandkit.qa.model import Finding
 
 
@@ -392,7 +393,12 @@ def check_index_matches_content(
     return findings
 
 
-def check_no_net_structure_loss(removed_refs: set[str], profile: dict) -> list[Finding]:
+def check_no_net_structure_loss(
+    removed_refs: set[str],
+    profile: dict,
+    *,
+    confidence: float | None = None,
+) -> list[Finding]:
     """The destructive-action floor (§6): no preserved anchor/index removed unless
     the deterministic layer independently classified it placeholder/demo.
 
@@ -401,6 +407,14 @@ def check_no_net_structure_loss(removed_refs: set[str], profile: dict) -> list[F
     deterministically-corroborated destructive verdict (``fill_rule='clear'`` for a
     cover anchor, ``reconcile='clear'`` for an index, or a ``verdict='demo'`` region);
     otherwise the deletion is an ERROR. Model-free (it reads the frozen verdicts).
+
+    ``confidence`` (optional) is the model's single ``comprehension.confidence``, the
+    SAME value the reconcile sites gate on. When supplied, the backstop also
+    re-verifies the destructive-action confidence floor: a sanctioned removal whose
+    confidence does NOT clear the floor is an ERROR, because under the uniform policy
+    such a removal should have been downgraded to KEEP at the reconcile site (a wrong
+    delete is unrecoverable). When ``confidence`` is ``None`` the floor re-check is
+    skipped (additive, back-compatible) and only the verdict-corroboration gate runs.
     """
     comp = _present_comprehension(profile)
     findings: list[Finding] = []
@@ -434,6 +448,7 @@ def check_no_net_structure_loss(removed_refs: set[str], profile: dict) -> list[F
         else set()
     )
     sanctioned = cleared_anchors | cleared_indexes | demo_regions
+    floor_blocks = confidence is not None and not confidence_clears_floor(confidence)
     for ref in sorted(removed_refs):
         if ref not in sanctioned:
             findings.append(
@@ -442,6 +457,19 @@ def check_no_net_structure_loss(removed_refs: set[str], profile: dict) -> list[F
                     schema.Severity.ERROR.value,
                     f"reconciliation removed {ref!r} without a corroborated "
                     f"destructive verdict",
+                )
+            )
+        elif floor_blocks:
+            # The verdict is sanctioned, but the model's confidence is below the
+            # destructive floor: under the uniform policy the reconcile site should
+            # have downgraded this to KEEP. A removal that still happened is a floor
+            # breach (a wrong delete is unrecoverable), so surface it LOUDLY.
+            findings.append(
+                Finding(
+                    "no_net_structure_loss",
+                    schema.Severity.ERROR.value,
+                    f"reconciliation removed {ref!r} below the destructive "
+                    f"confidence floor ({confidence:.2f})",
                 )
             )
     return findings
