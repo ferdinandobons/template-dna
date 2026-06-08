@@ -101,14 +101,14 @@
     <text x="489" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7FB6F2">W</text>
     <text x="508" y="468" font-size="14" fill="#EAF1FF" font-weight="600">Word <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.docx</tspan></text>
 
-    <rect x="632" y="447" width="202" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
+    <rect x="632" y="447" width="190" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
     <rect x="646" y="455" width="18" height="18" rx="4" fill="#33240F" stroke="#E0742B" stroke-width="1.4"/>
     <text x="655" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#F2A368">P</text>
     <text x="674" y="468" font-size="14" fill="#EAF1FF" font-weight="600">PowerPoint <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.pptx</tspan></text>
 
-    <rect x="850" y="447" width="148" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
-    <rect x="864" y="455" width="18" height="18" rx="4" fill="#0F2A1C" stroke="#2BA45F" stroke-width="1.4"/>
-    <text x="873" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6FD79E">X</text>
-    <text x="892" y="468" font-size="14" fill="#EAF1FF" font-weight="600">Excel <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.xlsx</tspan></text>
+    <rect x="838" y="447" width="148" height="32" rx="9" fill="#16213F" stroke="#2C3A66"/>
+    <rect x="852" y="455" width="18" height="18" rx="4" fill="#0F2A1C" stroke="#2BA45F" stroke-width="1.4"/>
+    <text x="861" y="468" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6FD79E">X</text>
+    <text x="880" y="468" font-size="14" fill="#EAF1FF" font-weight="600">Excel <tspan fill="#7E96CC" font-family="ui-monospace, Menlo, monospace" font-size="12.5">.xlsx</tspan></text>
   </g>
 </svg>
