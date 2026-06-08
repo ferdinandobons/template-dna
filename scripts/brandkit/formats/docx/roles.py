@@ -207,6 +207,28 @@ def infer_roles(doc) -> dict:
             "builtin Title style",
         )
 
+    # cover.subtitle (analogous to cover.title): a CUSTOM style whose display name
+    # carries a subtitle token (the brand's own subtitle line, e.g. "BrandDocs
+    # Cover Subtitle") is preferred over Word's builtin ``Subtitle``, mirroring the
+    # custom-over-builtin precedence used for table.default. Bound best_effort -
+    # cover slots never gate output. The deterministic cover fill uses this to
+    # place an authored subtitle into its styled slot IN PLACE (correct-by-style,
+    # not by guessing placeholder text); when no subtitle style exists at all (a
+    # template whose subtitle is a databound SDT, or none) the subtitle is surfaced
+    # as unplaced and the comprehension path fills the full multi-slot cover.
+    custom_paragraph_styles = [s for s in paragraph_styles if _is_custom_style(s)]
+    subtitle = _best_name_token_style(custom_paragraph_styles, "subtitle") or _find_style(
+        paragraph_styles, "Subtitle"
+    )
+    if subtitle is not None:
+        add(
+            "cover.subtitle",
+            subtitle,
+            0.7,
+            schema.Status.BEST_EFFORT.value,
+            "custom subtitle-named or builtin Subtitle style",
+        )
+
     toc = _toc_heading_style(paragraph_styles)
     if toc is not None:
         add(

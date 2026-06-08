@@ -30,6 +30,7 @@ from docx.oxml.ns import qn
 
 from brandkit.formats.docx import cover as covermod
 from brandkit.formats.docx import generate as docx_generate
+from brandkit.formats.docx import roles as docx_roles
 from brandkit.formats.docx import structure
 from brandkit.formats.docx.structure import _local_name, w
 from brandkit.ir import components as ir_components
@@ -1329,6 +1330,64 @@ class OrphanIndexHeadingTest(unittest.TestCase):
             self.assertTrue(demo["present"])
             # start_text is THIS template's own captured body heading, not a literal.
             self.assertEqual(demo["start_text"], "Real Body Heading")
+
+
+# ---------------------------------------------------------------------------
+# Deterministic cover subtitle fill (style-identified, comprehension absent)
+# ---------------------------------------------------------------------------
+class DeterministicCoverSubtitleFillTest(unittest.TestCase):
+    """Without comprehension, the cover fill now places the authored subtitle into
+    a slot identified by its resolved ``cover.subtitle`` style (correct-by-style,
+    not by guessing the template's placeholder text), so the output no longer shows
+    the template's stale demo subtitle. Extra fields stay the comprehension path's
+    job and are still surfaced as unplaced."""
+
+    def test_subtitle_slot_filled_in_place_by_style(self):
+        doc = Document()
+        doc.add_paragraph("{{title}}", style="Title")  # cover title slot
+        doc.add_paragraph("Stale template subtitle", style="Subtitle")  # cover subtitle
+        doc.add_paragraph("Body", style="Heading 1")  # body -> closes the cover region
+
+        roles = docx_roles.infer_roles(doc)
+        self.assertIn("cover.subtitle", roles)  # resolved from the builtin Subtitle
+        prof = _docx_profile(roles)
+        cover = ir.Cover(
+            fields={"title": "Napoleon", "subtitle": "Full history", "doc_id": "X-1"}
+        )
+        sink: list[Finding] = []
+        covermod.compose_cover(doc, cover, prof, findings=sink)
+
+        texts = [p.text for p in doc.paragraphs]
+        # the authored subtitle replaced the template's stale subtitle IN PLACE
+        self.assertIn("Full history", texts)
+        self.assertNotIn("Stale template subtitle", "\n".join(texts))
+        filled = next(p for p in doc.paragraphs if p.text == "Full history")
+        self.assertEqual(filled.style.name, "Subtitle")  # cover.subtitle style kept
+
+        # subtitle is no longer reported unplaced; the extra field still is.
+        notes = "\n".join(f.message for f in sink if f.check == "cover_degraded")
+        self.assertNotIn("subtitle", notes)
+        self.assertIn("doc_id", notes)
+
+    def test_no_subtitle_style_leaves_subtitle_unplaced(self):
+        # A template with no subtitle style at all (no builtin Subtitle, no custom
+        # subtitle-named style) cannot place the subtitle deterministically: it is
+        # surfaced as unplaced (the comprehension path fills the full cover).
+        doc = Document()
+        title = doc.add_paragraph("{{title}}", style="Title")  # noqa: F841
+        doc.add_paragraph("Body", style="Heading 1")
+        roles = {
+            "_index": ["cover.title"],
+            "cover.title": {
+                "resolver": {"type": "named_style", "style_id": "Title"},
+            },
+        }
+        prof = _docx_profile(roles)
+        cover = ir.Cover(fields={"title": "Napoleon", "subtitle": "Full history"})
+        sink: list[Finding] = []
+        covermod.compose_cover(doc, cover, prof, findings=sink)
+        notes = "\n".join(f.message for f in sink if f.check == "cover_degraded")
+        self.assertIn("subtitle", notes)  # honestly surfaced, never silently dropped
 
 
 if __name__ == "__main__":

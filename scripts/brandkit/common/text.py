@@ -324,6 +324,16 @@ NAME_TOKEN_LEXICON: dict[str, frozenset[str]] = {
             "frontespizio",
         }
     ),
+    "subtitle": frozenset(
+        {
+            "subtitle",
+            "sottotitolo",
+            "sous-titre",
+            "untertitel",
+            "subtitulo",
+            "subtítulo",
+        }
+    ),
     "toc": frozenset(
         {
             "toc",

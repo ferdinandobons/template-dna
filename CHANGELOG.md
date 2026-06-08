@@ -2,6 +2,20 @@
 
 All notable changes to BrandDocs are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Word: the deterministic cover fill (comprehension absent) now also places
+  the authored **subtitle** into the cover slot identified by its resolved
+  `cover.subtitle` style - correct-by-style, never guessed from the template's
+  placeholder text - so the output no longer shows the template's stale demo
+  subtitle. Role inference resolves `cover.subtitle` from a custom
+  subtitle-named style (preferred) or the builtin `Subtitle`; a multilingual
+  `subtitle` name-token family backs it. Templates whose subtitle is a databound
+  SDT keep working via core-property sync; extra cover fields (date/id/author)
+  remain the comprehension path's job and are still surfaced as unplaced.
+
 ## [0.2.0] - 2026-06-08
 
 Hardening release: correctness fixes across all three formats, a real

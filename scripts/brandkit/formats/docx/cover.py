@@ -476,28 +476,50 @@ def _note_unplaced_cover_extras(sink: list, extras: list[str]) -> None:
 def _compose_cover_deterministic(
     doc, cover: Cover, profile: dict, sink: list
 ) -> set[str]:
-    """Today's deterministic single-title cover fill (comprehension absent)."""
+    """Deterministic cover fill (comprehension absent): place the title, then a
+    style-identified subtitle slot. Any remaining authored slots (extra fields) are
+    surfaced as unplaced - the comprehension path fills the full multi-slot cover.
+    """
     title = textutil.runs_to_text(cover.title or []) or str(
         cover.fields.get("title", "")
     )
     if not title:
         return set()
     extras = _unplaced_cover_extras(cover)
+    subtitle = textutil.runs_to_text(cover.subtitle or []) or str(
+        cover.fields.get("subtitle", "")
+    )
 
+    _fill_cover_title_deterministic(doc, profile, title, sink)
+    if (
+        subtitle
+        and _fill_cover_subtitle_deterministic(doc, profile, subtitle)
+        and "subtitle" in extras
+    ):
+        extras.remove("subtitle")
+    _note_unplaced_cover_extras(sink, extras)
+    return set()
+
+
+def _fill_cover_title_deterministic(
+    doc, profile: dict, title: str, sink: list
+) -> None:
+    """Place the cover title IN PLACE: a title SDT, then a ``{{title}}``/"Insert
+    title" placeholder paragraph, then (last resort) a new title paragraph moved
+    before the first toc/body child. Unchanged behavior, extracted so the subtitle
+    fill can run after whichever title branch fired."""
     # 1) Block-level SDT cover title.
     for sdt in _iter_block_sdts(doc):
         if _sdt_is_title(sdt) and _fill_sdt_title(sdt, title):
             _apply_role_style_sdt(doc, sdt, profile, "cover.title")
-            _note_unplaced_cover_extras(sink, extras)
-            return set()
+            return
 
     # 2) Placeholder paragraph - overwrite only the matching run's text in place.
     for para in doc.paragraphs[:8]:
         if PLACEHOLDER_TITLE in para.text or "Insert title" in para.text:
             _fill_paragraph_in_place(para, title)
             _apply_role_style(doc, para, profile, "cover.title")
-            _note_unplaced_cover_extras(sink, extras)
-            return set()
+            return
 
     # 3) No cover anchor: append a title paragraph but place it on the cover, i.e.
     # BEFORE the first toc/body child, never after the TOC.
@@ -511,7 +533,36 @@ def _compose_cover_deterministic(
             "no cover anchor in shell; title paragraph appended before the first toc/body child",
         )
     )
-    return set()
+
+
+def _fill_cover_subtitle_deterministic(doc, profile: dict, subtitle: str) -> bool:
+    """Fill a cover-region subtitle slot IN PLACE, identified by STYLE identity.
+
+    Correct-by-construction: the slot is the first cover-region paragraph whose
+    paragraph style is the profile's resolved ``cover.subtitle`` style - never a
+    guess from the template's placeholder text. This handles the common plain
+    styled-subtitle line (e.g. a "Cover Subtitle" paragraph) that the single-title
+    fill used to leave showing the template's stale demo subtitle. A template whose
+    subtitle is a databound SDT (bound to e.g. ``core/subject``) is already covered
+    by :func:`_sync_core_properties`; extra fields (date/id/author) stay the
+    comprehension path's job. Returns True when a slot was filled."""
+    resolver = ((profile.get("roles") or {}).get("cover.subtitle") or {}).get(
+        "resolver"
+    ) or {}
+    style_id = resolver.get("style_id")
+    if not style_id:
+        return False
+    children = list(doc.element.body)
+    for i in sorted(_cover_child_indices(doc)):
+        if i >= len(children):
+            continue
+        child = children[i]
+        if _local_name(child.tag) != "p" or _p_style_val(child) != style_id:
+            continue
+        _fill_p_element_in_place(child, subtitle)
+        _apply_role_style_p_element(doc, child, profile, "cover.subtitle")
+        return True
+    return False
 
 
 def _resolve_anchor_element(doc, anchor_ref: str):
