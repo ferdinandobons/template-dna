@@ -123,9 +123,12 @@ def _probe_binary(name: str) -> tuple[bool, str | None, str | None]:
     path = shutil.which(name)
     if path is None:
         return False, None, "not found on PATH"
-    preflight_error = _preflight_binary_error(name, path)
-    if preflight_error:
-        return False, path, preflight_error
+    # Run the actual version probe FIRST (timeout-guarded, so a hang or crash is
+    # caught and never harms this process). Whether the binary RUNS is the
+    # authoritative test of usability - not whether its code signature is pristine.
+    # A preflight signature quibble (e.g. a macOS LibreOffice whose seal broke after
+    # an update / quarantine removal but which still renders perfectly) is therefore
+    # NON-fatal: it is only surfaced as the reason WHEN the binary also fails to run.
     args = [path, *OPTIONAL_BINARY_PROBES.get(name, ("--version",))]
     try:
         proc = subprocess.run(
@@ -135,12 +138,12 @@ def _probe_binary(name: str) -> tuple[bool, str | None, str | None]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, path, str(exc)
+        return False, path, _preflight_binary_error(name, path) or str(exc)
     if proc.returncode != 0:
         stderr = _short_output(proc.stderr)
         stdout = _short_output(proc.stdout)
         detail = stderr or stdout or f"exit code {proc.returncode}"
-        return False, path, detail
+        return False, path, _preflight_binary_error(name, path) or detail
     return True, path, None
 
 
@@ -151,12 +154,14 @@ def _preflight_binary_error(name: str, path: str) -> str | None:
 
 
 def _soffice_app_signature_error(path: str) -> str | None:
-    """Return a macOS LibreOffice signature error without launching the app.
+    """Return a macOS LibreOffice signature problem, used as a FALLBACK diagnostic.
 
-    In the Codex desktop environment a quarantined or invalidly signed
-    ``LibreOffice.app`` can abort inside AppKit before headless conversion even
-    starts. Checking the bundle signature is safer than probing by conversion,
-    because it avoids spawning the crashing process.
+    A quarantined or invalidly signed ``LibreOffice.app`` can abort inside AppKit
+    before headless conversion starts; when that happens the version probe fails
+    (non-zero / timeout) and this explains WHY. It is NOT a hard gate: a bundle
+    whose seal is imperfect (e.g. broken by an update or a quarantine removal) but
+    which still launches and renders is fully usable, so this is only consulted to
+    enrich the error message when the binary actually fails to run.
     """
     app = _libreoffice_app_for_soffice(path)
     if app is None:

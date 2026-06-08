@@ -245,7 +245,10 @@ class RendererAvailabilityTest(unittest.TestCase):
         self.assertFalse(status["binaries"]["soffice"])
         self.assertFalse(status["visual_qa"])
 
-    def test_probe_marks_soffice_unusable_when_macos_signature_invalid(self) -> None:
+    def test_signature_invalid_but_functional_soffice_is_usable(self) -> None:
+        """A macOS signature quibble is NON-fatal: if soffice actually RUNS, it is
+        usable. The functional probe is authoritative, not codesign - a LibreOffice
+        whose seal broke after an update/quarantine removal still renders."""
         calls = []
 
         def fake_signature_error(path):
@@ -257,8 +260,6 @@ class RendererAvailabilityTest(unittest.TestCase):
 
         def fake_run(args, *unused_args, **unused_kwargs):
             calls.append(list(args))
-            if args[0].endswith("soffice"):
-                raise AssertionError("invalid soffice app must not be launched")
             return SimpleNamespace(returncode=0, stdout=b"version ok", stderr=b"")
 
         with (
@@ -266,12 +267,40 @@ class RendererAvailabilityTest(unittest.TestCase):
             patch.object(doctor, "_soffice_app_signature_error", fake_signature_error),
             patch.object(subprocess, "run", fake_run),
         ):
-            status = doctor.probe()
+            status = doctor.probe(skip_visual_pipeline=True)
+
+        # Usable despite the signature quibble, and it WAS launched (functional wins).
+        self.assertTrue(status["binaries"]["soffice"])
+        self.assertNotIn("soffice", status["binary_errors"])
+        self.assertTrue(any(call and call[0].endswith("soffice") for call in calls))
+
+    def test_signature_invalid_and_crashing_soffice_is_unusable_with_reason(
+        self,
+    ) -> None:
+        """When soffice BOTH has a bad seal AND fails to run, it is unusable and the
+        signature problem is surfaced as the reason."""
+
+        def fake_signature_error(path):
+            return (
+                "LibreOffice.app signature invalid: bad signature"
+                if path.endswith("soffice")
+                else None
+            )
+
+        def fake_run(args, *unused_args, **unused_kwargs):
+            if args[0].endswith("soffice"):
+                return SimpleNamespace(returncode=134, stdout=b"", stderr=b"abort")
+            return SimpleNamespace(returncode=0, stdout=b"version ok", stderr=b"")
+
+        with (
+            patch.object(doctor.shutil, "which", lambda name: f"/fake/{name}"),
+            patch.object(doctor, "_soffice_app_signature_error", fake_signature_error),
+            patch.object(subprocess, "run", fake_run),
+        ):
+            status = doctor.probe(skip_visual_pipeline=True)
 
         self.assertFalse(status["binaries"]["soffice"])
-        self.assertFalse(status["visual_qa"])
         self.assertIn("signature invalid", status["binary_errors"]["soffice"])
-        self.assertFalse(any(call[0].endswith("soffice") for call in calls))
 
     def test_probe_marks_visual_unavailable_when_conversion_probe_fails(self) -> None:
         """Version commands can pass while headless conversion is unusable."""

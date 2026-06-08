@@ -27,38 +27,50 @@ python3 -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activ
 pip install -r requirements.txt
 ```
 
-### Recommended: visual QA (render-based checks)
+### Visual QA dependencies (keep the visual gate on)
 
-These power the render-based visual QA pass, which catches layout problems that
-deterministic checks can't: text overflow, blank pages, clipping. In Word these
-only surface at render time, so **without these tools the visual pass is skipped**
-and such issues can slip through. Generation still runs without them and the engine
-degrades gracefully, but you should install them for reliable on-brand output.
+The **visual QA gate is a core part of the QA step** and runs by default whenever
+its tools are present: it renders the output and catches layout problems the
+deterministic checks can't (text overflow, blank pages, clipping, stale demo text)
+which in Word only surface at render time. Generation still runs without them (the
+engine degrades gracefully to L0), but **install them so the visual gate stays
+on** - it is treated as fundamental, not optional.
 
-- **LibreOffice** (`soffice`): headless render to PDF
-- **Poppler** (`pdftoppm`): PDF → PNG
-- **PyMuPDF** (`fitz`): optional PDF → PNG fallback when Poppler is unavailable
+Simplest path - one command auto-detects your package manager and installs them:
+
+```bash
+bash scripts/setup_visual_qa.sh
+```
+
+What it installs:
+
+- **LibreOffice** (`soffice`): headless render to PDF (the only hard system dep)
+- **Poppler** (`pdftoppm`): PDF → PNG (or `python -m pip install PyMuPDF` instead)
 - **Tesseract** (`tesseract`): optional OCR for rendered residual placeholder/demo text
+
+Or install manually:
 
 ```bash
 # macOS (Homebrew)
 brew install --cask libreoffice && brew install poppler tesseract
-python -m pip install PyMuPDF   # optional fallback
 
 # Debian / Ubuntu
 sudo apt-get install -y libreoffice poppler-utils tesseract-ocr
-python -m pip install PyMuPDF   # optional fallback
 
 # Fedora
 sudo dnf install -y libreoffice poppler-utils tesseract
-python -m pip install PyMuPDF   # optional fallback
 
 # Windows
 # winget install TheDocumentFoundation.LibreOffice
-#   + Poppler via conda-forge or a prebuilt binary on PATH
+#   + Poppler via conda-forge or a prebuilt binary on PATH (or: pip install PyMuPDF)
 #   + optional: winget install UB-Mannheim.TesseractOCR
-#   + optional: python -m pip install PyMuPDF
 ```
+
+> **macOS note:** the gate considers `soffice` usable as long as it actually
+> renders - a LibreOffice whose code signature was knocked loose by an update or a
+> quarantine removal still works (the functional render is authoritative, not a
+> pristine signature). If `doctor` ever reports `soffice` unusable but it does run,
+> a clean reinstall (`brew reinstall --cask libreoffice`) restores the signature.
 
 ### Check what's available
 
