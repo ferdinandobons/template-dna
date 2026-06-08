@@ -53,7 +53,7 @@ def extract(
     charts = xlsx_structure.inventory_charts(wb)
     images = xlsx_structure.inventory_images(wb)
 
-    roles = _roles(named_regions, named_styles)
+    roles = _roles(named_regions, named_styles, number_formats)
     surface = {
         "xlsx": {
             "sheets": wb.sheetnames,
@@ -111,7 +111,11 @@ def extract(
     )
 
 
-def _roles(named_regions: dict, named_styles: list[dict] | None = None) -> dict:
+def _roles(
+    named_regions: dict,
+    named_styles: list[dict] | None = None,
+    number_formats: list[dict] | None = None,
+) -> dict:
     """Build the role registry from the named ranges + named cell styles (no literals).
 
     Every named range becomes a ``named_range`` role keyed by its slugified name;
@@ -125,19 +129,33 @@ def _roles(named_regions: dict, named_styles: list[dict] | None = None) -> dict:
     survived - a structural nomination (the style is in the workbook), never a name
     lexicon match (CC-2 / X3). Builtin styles (Normal/...) are not nominated.
 
+    Finally, the workbook's OWN distinct number-format masks are promoted into
+    ``number.<family>`` roles (``number_format`` resolver). Each is a semantic
+    family (currency/percent/date/...) bound to the verbatim mask the template
+    uses, so a Grid can name the *intent* and the resolver fills the real mask -
+    brand-by-construction, never a fabricated format. Classification is structural
+    (mask tokens), best-effort.
+
     When the workbook declares no named range AND no brand style at all, a single
     default ``cell_style`` role keeps the registry non-empty so generation has a
     fallback.
     """
     roles = {"_index": []}
 
-    def add(rid: str, resolver: dict, signal: str) -> None:
+    def add(
+        rid: str,
+        resolver: dict,
+        signal: str,
+        *,
+        status: str = schema.Status.ROBUST.value,
+        confidence: float = 0.85,
+    ) -> None:
         roles[rid] = {
             "resolver": resolver,
             "appearance": {},
-            "verified": True,
-            "confidence": 0.85,
-            "status": schema.Status.ROBUST.value,
+            "verified": status != schema.Status.STUB.value,
+            "confidence": confidence,
+            "status": status,
             "evidence": {"signal": signal},
         }
         roles["_index"].append(rid)
@@ -167,6 +185,18 @@ def _roles(named_regions: dict, named_styles: list[dict] | None = None) -> dict:
             rid,
             {"type": schema.ResolverType.CELL_STYLE.value, "style_name": name},
             f"named cell style {name}",
+        )
+
+    # Promote the workbook's distinct number-format masks into number.<family>
+    # roles (number_format resolver). The family is the brand-agnostic intent a
+    # Grid names; the resolver target is the template's own verbatim mask.
+    for rid, mask in sorted(xlsx_structure.number_format_roles(number_formats).items()):
+        add(
+            rid,
+            {"type": schema.ResolverType.NUMBER_FORMAT.value, "number_format": mask},
+            f"number format mask {mask!r}",
+            status=schema.Status.BEST_EFFORT.value,
+            confidence=0.7,
         )
 
     if not roles["_index"]:
@@ -254,6 +284,7 @@ def _capabilities() -> dict:
         "emits_region_geometry": True,
         "comprehension_demo_classification": True,
         "native_charts": True,
+        "resolves_number_formats": True,
     }
 
 

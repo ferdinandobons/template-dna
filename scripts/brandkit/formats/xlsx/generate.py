@@ -93,6 +93,11 @@ def generate(
         cell = wb[sheet].cell(row=min_row, column=min_col)
         _fill_cell(cell, value, sink=sink, where=name)
         _reassert_cover_style(cell, cover_style_for_name.get(name))
+        # Apply the resolved number-format intent LAST so it wins over any mask the
+        # re-asserted cell style carries (the explicit semantic intent is authoritative).
+        mask = _resolve_number_mask(resolver, grid.formats.get(name), name, sink)
+        if mask and not isinstance(cell, MergedCell):
+            cell.number_format = mask
 
     # Fill multi-cell named regions (bounds-guarded; never overruns the range).
     # Same formula guard as the single-cell loop: a region named over a block that
@@ -106,14 +111,15 @@ def generate(
             name, values, max_rows=max_row - min_row + 1, max_cols=max_col - min_col + 1
         )
         ws = wb[sheet]
+        # Resolve the region's number-format intent ONCE (one degrade at most), then
+        # apply the same mask to each filled cell.
+        region_mask = _resolve_number_mask(resolver, grid.formats.get(name), name, sink)
         for r_idx, row in enumerate(values):
             for c_idx, value in enumerate(row):
-                _fill_cell(
-                    ws.cell(row=min_row + r_idx, column=min_col + c_idx),
-                    value,
-                    sink=sink,
-                    where=name,
-                )
+                cell = ws.cell(row=min_row + r_idx, column=min_col + c_idx)
+                _fill_cell(cell, value, sink=sink, where=name)
+                if region_mask and not isinstance(cell, MergedCell):
+                    cell.number_format = region_mask
 
     # Native charts over the workbook's OWN cell data (after the fills, so the
     # referenced ranges carry the new values). The chart inherits the workbook
@@ -466,6 +472,36 @@ def _holds_formula(cell) -> bool:
     generator never authors and must never overwrite or blank.
     """
     return isinstance(cell.value, str) and cell.value.startswith("=")
+
+
+def _resolve_number_mask(
+    resolver: ProfileResolver, family: Optional[str], where: str, sink: list[Finding]
+) -> Optional[str]:
+    """Resolve a semantic number ``family`` to the template's own mask, or ``None``.
+
+    Routes ``number.<family>`` through the shared resolver spine. Returns the mask
+    when the profile carries that ``number_format`` role; otherwise degrades loudly
+    (one WARNING) and returns ``None`` so the caller leaves the cell's existing
+    format - a format is NEVER fabricated (brand-by-construction, fail-closed).
+    """
+    if not family:
+        return None
+    op = resolver.resolve_role(f"number.{family}", fallback=None)
+    if op.resolver_type == schema.ResolverType.NUMBER_FORMAT.value:
+        mask = op.resolver.get("number_format")
+        if mask:
+            return str(mask)
+    sink.append(
+        Finding(
+            check="number_format_degraded",
+            severity=schema.Severity.WARNING.value,
+            message=(
+                f"number format {family!r} for {where!r} is not defined in this "
+                f"template (cell left with its existing format)"
+            ),
+        )
+    )
+    return None
 
 
 def _fill_cell(

@@ -647,6 +647,21 @@ def _validate_resolver_consistency(profile: dict, kind: Optional[str]) -> list[s
                     f"roles.{rid}.resolver.name: named range {name!r} not in "
                     f"surface.{kind}.named_regions (have {sorted(named_regions)})"
                 )
+        elif rtype == ResolverType.NUMBER_FORMAT.value:
+            # A number_format resolver may only carry a mask the template actually
+            # uses (surface.xlsx.number_formats), so the resolver can never fabricate
+            # a format - the same brand guarantee as the named_range check above.
+            mask = resolver.get("number_format")
+            known = {
+                f.get("format")
+                for f in (sub.get("number_formats") or [])
+                if isinstance(f, dict)
+            }
+            if mask is not None and known and mask not in known:
+                problems.append(
+                    f"roles.{rid}.resolver.number_format: mask {mask!r} not in "
+                    f"surface.{kind}.number_formats"
+                )
     return problems
 
 

@@ -276,5 +276,139 @@ class NativeXlsxChartTest(unittest.TestCase):
             self.assertTrue(any(f.check == "block_degraded" for f in sink))
 
 
+class NumberFormatRoleTest(unittest.TestCase):
+    """The number_format resolver is wired end-to-end (extract -> resolve -> apply):
+    the template's own masks become ``number.<family>`` roles, a Grid names the
+    brand-agnostic intent, and generate fills the template's VERBATIM mask -
+    fail-closed when the family is absent, never fabricating a format."""
+
+    def test_classifier_families(self) -> None:
+        from brandkit.formats.xlsx import structure as xs
+
+        cases = {
+            "0.00%": "percent",
+            '"$"#,##0.00': "currency",
+            "[$€-2]#,##0.00": "currency",
+            "_($* #,##0.00_)": "accounting",
+            "yyyy-mm-dd": "date",
+            "m/d/yy h:mm": "datetime",
+            "h:mm:ss": "time",
+            "#,##0": "integer",
+            "#,##0.00": "decimal",
+            "@": "text",
+            "0.00E+00": "scientific",
+            "General": None,
+            "": None,
+        }
+        for code, fam in cases.items():
+            self.assertEqual(xs.number_format_family(code), fam, code)
+
+    def _build_shell(self, td: Path) -> Path:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Data"
+        ws["A1"] = 1234.5
+        ws["A1"].number_format = '"$"#,##0.00'
+        ws["A2"] = 0.25
+        ws["A2"].number_format = "0.0%"
+        ws["A3"] = 42
+        ws["A3"].number_format = "#,##0"
+        wb.defined_names.add(DefinedName("price", attr_text="Data!$B$1"))
+        wb.defined_names.add(DefinedName("shares", attr_text="Data!$B$2:$B$3"))
+        shell = td / "shell.xlsx"
+        wb.save(shell)
+        return shell
+
+    def _extract(self, td: Path, shell: Path):
+        old = os.getcwd()
+        os.chdir(td)
+        try:
+            xlsx_extract.extract(shell, "nf", scope="project", cwd=td)
+            return store.load_profile("nf", "project")
+        finally:
+            os.chdir(old)
+
+    def test_extract_emits_number_roles_bound_to_template_masks(self) -> None:
+        from brandkit.profile import schema
+
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._build_shell(td))
+            roles = loaded.profile["roles"]
+            self.assertEqual(
+                roles["number.currency"]["resolver"]["number_format"], '"$"#,##0.00'
+            )
+            self.assertEqual(
+                roles["number.percent"]["resolver"]["number_format"], "0.0%"
+            )
+            self.assertEqual(
+                roles["number.integer"]["resolver"]["number_format"], "#,##0"
+            )
+            self.assertEqual(schema.validate(loaded.profile), [])
+
+    def test_generate_applies_resolved_mask_to_cell_and_region(self) -> None:
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._build_shell(td))
+            grid = GridDocument(
+                cells={"price": 99.9},
+                regions={"shares": [[0.1], [0.2]]},
+                formats={"price": "currency", "shares": "percent"},
+            )
+            out = td / "out.xlsx"
+            sink: list[Finding] = []
+            xlsx_generate.generate(
+                loaded.profile, loaded.shell_path, grid, out, findings=sink
+            )
+            ws = load_workbook(out)["Data"]
+            self.assertEqual(ws["B1"].number_format, '"$"#,##0.00')
+            self.assertEqual(ws["B2"].number_format, "0.0%")
+            self.assertEqual(ws["B3"].number_format, "0.0%")
+            self.assertFalse(any(f.check == "number_format_degraded" for f in sink))
+
+    def test_unknown_family_degrades_fail_closed_without_fabricating(self) -> None:
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._build_shell(td))
+            grid = GridDocument(cells={"price": 1}, formats={"price": "klingon"})
+            out = td / "out.xlsx"
+            sink: list[Finding] = []
+            xlsx_generate.generate(
+                loaded.profile, loaded.shell_path, grid, out, findings=sink
+            )
+            degraded = [f for f in sink if f.check == "number_format_degraded"]
+            self.assertEqual(len(degraded), 1)
+            self.assertEqual(degraded[0].severity, "WARNING")
+            # No format was fabricated: the cell keeps its default General mask.
+            self.assertEqual(load_workbook(out)["Data"]["B1"].number_format, "General")
+
+    def test_fabricated_mask_is_rejected_by_validate(self) -> None:
+        from brandkit.profile import schema
+
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._build_shell(td))
+            loaded.profile["roles"]["number.currency"]["resolver"]["number_format"] = (
+                "FABRICATED"
+            )
+            problems = schema.validate(loaded.profile)
+            self.assertTrue(any("number_format" in p for p in problems), problems)
+
+    def test_number_format_generation_is_idempotent(self) -> None:
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._build_shell(td))
+            grid = GridDocument(cells={"price": 99.9}, formats={"price": "currency"})
+            a, b = td / "a.xlsx", td / "b.xlsx"
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, a)
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, b)
+            self.assertEqual(
+                hashlib.sha256(a.read_bytes()).hexdigest(),
+                hashlib.sha256(b.read_bytes()).hexdigest(),
+            )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

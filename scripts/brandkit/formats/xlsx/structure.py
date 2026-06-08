@@ -32,6 +32,7 @@ works for any workbook in any language.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from openpyxl.utils.cell import range_boundaries
@@ -351,6 +352,89 @@ def inventory_number_formats(wb) -> list[dict]:
         {"format": fmt, "count": counts[fmt], "sample": samples[fmt]}
         for fmt in sorted(counts)
     ]
+
+
+# Currency glyph inside a ``[$X-locale]`` block (X is a real symbol, not the
+# bare ``[$-409]`` locale marker) or a bare glyph after brackets/quotes are removed.
+_CURRENCY_GLYPHS = "$€£¥₹₩₪฿"
+
+
+def number_format_family(code: Optional[str]) -> Optional[str]:
+    """Classify an OOXML number-format mask into a brand-AGNOSTIC semantic family.
+
+    Maps the author's OWN format mask to one of a small, format-neutral vocabulary
+    (``percent`` | ``currency`` | ``accounting`` | ``datetime`` | ``date`` |
+    ``time`` | ``decimal`` | ``integer`` | ``text`` | ``scientific``) so a Grid can
+    name the *intent* and the profile resolves it to the template's real mask. The
+    classification is structural (it reasons over the mask tokens, never a locale
+    word list) and conservative: an unrecognized / trivial mask returns ``None`` so
+    no role is fabricated. Returns ``None`` for ``General`` / empty.
+    """
+    c = (code or "").strip()
+    if not c or c == "General":
+        return None
+    low = c.lower()
+    # For the date/time/numeric token scan, strip quoted literals AND bracket blocks
+    # so stray letters inside them (e.g. "day:" or [Red]) never confuse it.
+    bare = re.sub(r'"[^"]*"', "", c)
+    bare = re.sub(r"\[[^\]]*\]", "", bare)
+    bare_low = bare.lower()
+    # For CURRENCY, keep quoted literals (a glyph is often quoted, e.g. ``"$"#,##0``)
+    # but drop bracket blocks so the bare ``[$-409]`` LOCALE marker is not read as a
+    # currency; an in-bracket symbol ([$€-2], [$$-409]) is detected separately.
+    c_nobrackets = re.sub(r"\[[^\]]*\]", "", c)
+    has_pct = "%" in bare
+    in_bracket_currency = bool(re.search(r"\[\$[^\]\-]", c))  # [$€-2], [$$-409], ...
+    has_currency = in_bracket_currency or any(
+        g in c_nobrackets for g in _CURRENCY_GLYPHS
+    )
+    has_date = ("y" in bare_low) or ("d" in bare_low) or ("mmm" in bare_low)
+    has_time = ("h" in bare_low) or ("s" in bare_low) or ("a/p" in low)
+    has_sci = bool(re.search(r"e[+\-]", bare_low))
+    has_text = "@" in bare
+    is_numeric = any(ch in bare for ch in "0#?")
+    if has_pct:
+        return "percent"
+    if has_sci:
+        return "scientific"
+    if has_text and not is_numeric:
+        return "text"
+    if has_currency:
+        # Accounting masks align with parentheses / underscore padding.
+        return "accounting" if ("_(" in c or "_)" in c or "(" in bare) else "currency"
+    if has_date and has_time:
+        return "datetime"
+    if has_date:
+        return "date"
+    if has_time:
+        return "time"
+    if is_numeric:
+        return "decimal" if "." in bare else "integer"
+    return None
+
+
+def number_format_roles(number_formats: list[dict]) -> dict[str, str]:
+    """Pick one representative mask per semantic family from the inventory.
+
+    For each ``{"format", "count"}`` entry (from :func:`inventory_number_formats`),
+    classify the mask and keep, per family, the mask with the highest in-template
+    usage count (first on a tie, since the inventory is mask-sorted -> deterministic).
+    Returns ``{"number.<family>": <mask>}`` for the families the template actually
+    uses; empty when the workbook carries no classifiable masks.
+    """
+    best: dict[str, tuple[int, str]] = {}
+    for entry in number_formats or []:
+        if not isinstance(entry, dict):
+            continue
+        code = entry.get("format")
+        fam = number_format_family(code)
+        if not fam:
+            continue
+        count = int(entry.get("count", 0) or 0)
+        current = best.get(fam)
+        if current is None or count > current[0]:
+            best[fam] = (count, code)
+    return {f"number.{fam}": code for fam, (_, code) in best.items()}
 
 
 def inventory_named_styles(wb) -> list[dict]:
