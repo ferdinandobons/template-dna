@@ -149,11 +149,10 @@ def find_markdown_literals(text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Slug / safe filename
+# Slug
 # ---------------------------------------------------------------------------
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9]+")
 _SLUG_TRIM_RE = re.compile(r"^-+|-+$")
-_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def slugify(value: str, *, max_len: int = 64, default: str = "untitled") -> str:
@@ -170,20 +169,6 @@ def slugify(value: str, *, max_len: int = 64, default: str = "untitled") -> str:
     if max_len and len(slug) > max_len:
         slug = _SLUG_TRIM_RE.sub("", slug[:max_len])
     return slug or default
-
-
-def safe_filename(value: str, *, default: str = "file") -> str:
-    """Return a filesystem-safe filename, preserving a single extension.
-
-    Unlike :func:`slugify`, this keeps the case and the dot before a short
-    extension. Path separators and unsafe characters collapse to ``_``; the
-    result never starts with a dot (no accidental hidden files) and is never
-    empty.
-    """
-    name = (value or "").strip().replace("/", "_").replace("\\", "_")
-    name = _UNSAFE_FILENAME_RE.sub("_", name)
-    name = name.lstrip(".")
-    return name or default
 
 
 # ---------------------------------------------------------------------------

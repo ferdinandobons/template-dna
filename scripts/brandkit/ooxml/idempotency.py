@@ -147,9 +147,12 @@ def repack_fixed_timestamps(
     if pin_modified_from_created:
         core = parts.get("docProps/core.xml")
         if core is not None:
-            parts["docProps/core.xml"] = _pin_core_dcterms(
-                core.decode("utf-8"), both=False
-            ).encode("utf-8")
+            try:
+                parts["docProps/core.xml"] = _pin_core_dcterms(
+                    core.decode("utf-8"), both=False
+                ).encode("utf-8")
+            except UnicodeDecodeError:
+                pass  # tolerate a non-UTF-8 core.xml (idempotency is a nicety)
 
     try:
         tmp = path.with_name(path.name + ".tmp")

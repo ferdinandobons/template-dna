@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("extract")
     p.add_argument("--name", required=True)
     p.add_argument("--template", required=True)
-    p.add_argument("--scope", default="project", choices=("auto", "project", "global"))
+    p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
 
     p = sub.add_parser("verify")
     p.add_argument("--name", required=True)
@@ -85,14 +85,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "extract":
         path = Path(args.template)
         suffix = path.suffix.lower()
-        if suffix == ".docx":
-            profile_json = docx_extract.extract(path, args.name, scope=args.scope)
-        elif suffix == ".pptx":
-            profile_json = pptx_extract.extract(path, args.name, scope=args.scope)
-        elif suffix == ".xlsx":
-            profile_json = xlsx_extract.extract(path, args.name, scope=args.scope)
-        else:
-            raise SystemExit("supported templates: .docx, .pptx, .xlsx")
+        # A malformed/unreadable template must fail with a clean "ERROR extract: ..."
+        # and exit 1 (mirroring the generate command), not an unhandled traceback.
+        # The bad-suffix SystemExit is a BaseException, so it is NOT swallowed here.
+        try:
+            if suffix == ".docx":
+                profile_json = docx_extract.extract(path, args.name, scope=args.scope)
+            elif suffix == ".pptx":
+                profile_json = pptx_extract.extract(path, args.name, scope=args.scope)
+            elif suffix == ".xlsx":
+                profile_json = xlsx_extract.extract(path, args.name, scope=args.scope)
+            else:
+                raise SystemExit("supported templates: .docx, .pptx, .xlsx")
+        except Exception as exc:
+            print(f"ERROR extract: {exc}")
+            return 1
         loaded = store.load_profile(args.name, args.scope)
         report = run_qa(
             None, loaded.profile, mode="verify", qa="fast", shell=loaded.shell_path

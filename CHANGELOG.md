@@ -25,6 +25,29 @@ All notable changes to BrandDocs are documented in this file.
   SDT keep working via core-property sync; extra cover fields (date/id/author)
   remain the comprehension path's job and are still surfaced as unplaced.
 
+### Fixed
+
+- General correctness + quality review (multi-agent, adversarially verified):
+  - **Word/PPTX tables no longer drop multi-run column headers.** A header cell
+    authored with rich runs (e.g. plain text + a bold unit) kept only its first
+    run through `Table.from_dict`; every run is now preserved (and the loose
+    `{"runs": [...]}` / `{"text": "..."}` / run-list / string shapes a body cell
+    accepts are accepted for columns too).
+  - **PowerPoint body text on a placeholderless layout degrades loudly** instead
+    of vanishing silently (a `block_degraded` WARNING is now recorded).
+  - Word hyperlink runs with empty text no longer emit an empty `w:hyperlink`.
+  - `comprehend`'s skeleton demo/required annotation matched the wrong key
+    (always None); it now keys on the region id, so the annotation actually applies.
+  - `extract` wraps its work in error handling (clean `ERROR extract: ...` + exit 1,
+    matching `generate`) and defaults `--scope` to `auto` like the other commands.
+  - Idempotency: a non-UTF-8 `core.xml` no longer crashes the timestamp pin; the
+    nested-package dcterms regex uses `[^<]*` + `count=1` so it cannot cross a tag
+    boundary on malformed XML.
+- Quality cleanups: consolidated the duplicate docx `_apply_*_style` helpers,
+  removed the unused `safe_filename` utility, dropped a redundant `set()` in
+  `has_part`, removed a duplicate `visual.no_pages` finding, and stopped running
+  `check_profile` twice in the QA gate.
+
 ### Changed
 
 - `component_survival` now has a single source of truth. The pptx generator's

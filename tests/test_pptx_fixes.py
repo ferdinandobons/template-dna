@@ -219,6 +219,30 @@ class C3RolesFromRealLayouts(unittest.TestCase):
             # A stub profile still validates (no fabricated target to contradict).
             self.assertEqual(schema.validate(profile), [])
 
+    def test_body_text_degrades_loudly_when_no_body_placeholder(self) -> None:
+        # A placeholderless layout has nowhere to put body text. The engine must
+        # DEGRADE LOUDLY (block_degraded), never silently drop the content.
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "bare.pptx"
+            _placeholderless_template(template)
+            profile = _extract_profile(template)
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Heading(level=1, runs=[{"t": "Section"}]),
+                    ir.Paragraph(runs=[{"t": "Body text with nowhere to go."}]),
+                ]
+            )
+            out = tp / "out.pptx"
+            sink: list[Finding] = []
+            pg.generate(profile, template, idoc, out, findings=sink)
+            self.assertTrue(out.is_file())
+            degraded = [f for f in sink if f.check == "block_degraded"]
+            self.assertTrue(
+                any("paragraph" in f.message for f in degraded),
+                f"body text must degrade loudly, not vanish: {[f.message for f in sink]}",
+            )
+
     def test_real_extract_reports_cover_anchor_honestly(self) -> None:
         # Drive the real on-disk extract() to confirm anchors track reality:
         # present for a deck with a cover layout, absent for a placeholder-less one.

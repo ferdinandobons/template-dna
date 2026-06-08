@@ -545,8 +545,17 @@ def _append_content_slides(
             elif chunk.chart is not None:
                 _clear_body_placeholder(body)
                 _add_native_chart(slide, prs, chunk.chart, body, sink)
-            elif body is not None and chunk.lines:
-                _write_body_lines(body, chunk.lines)
+            elif chunk.lines:
+                if body is not None:
+                    _write_body_lines(body, chunk.lines)
+                else:
+                    # No body placeholder on this layout: surface the unplaced body
+                    # text rather than dropping it silently (the engine invariant).
+                    _degrade(
+                        sink,
+                        "paragraph",
+                        note="not placed in pptx (layout has no body placeholder)",
+                    )
 
 
 def _content_chunks(blocks: list, capacity: int, sink: list) -> list[SlideChunk]:
@@ -594,7 +603,10 @@ def _content_chunks(blocks: list, capacity: int, sink: list) -> list[SlideChunk]
 
 
 def _kpi_to_table(block: ir.Kpi) -> Optional[ir.Table]:
-    """Build a brand table (one row per metric) from a KPI block, value bolded."""
+    """Build a brand table (one row per metric) from a KPI block, value bolded.
+
+    ``columns`` is intentionally empty: KPI metrics render as label/value(/delta)
+    rows with NO header row (the table writer treats empty ``columns`` as headerless)."""
     items = block.items or []
     if not items:
         return None
@@ -812,8 +824,12 @@ def _table_column_count(table: ir.Table) -> int:
 def _table_header_text(table: ir.Table, index: int) -> str:
     if index >= len(table.columns):
         return ""
-    cell = table.columns[index]
-    return textutil.runs_to_text([cell]) if isinstance(cell, dict) else str(cell)
+    col = table.columns[index]
+    if isinstance(col, list):  # a run-list (the from_dict shape) - keep all runs
+        return textutil.runs_to_text(col)
+    if isinstance(col, dict):  # a bare single run (direct construction)
+        return textutil.runs_to_text([col])
+    return str(col)
 
 
 def _table_cell_text(row: list, index: int) -> str:

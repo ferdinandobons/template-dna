@@ -55,6 +55,8 @@ def iter_complex_field_events(root) -> Iterator[Tuple[str, object]]:
     """
     for el in root.iter(_FLDCHAR, _INSTRTEXT):
         if local_name(el.tag) == "fldChar":
-            yield el.get(_FLDCHARTYPE), el
+            # An absent fldCharType yields "" (not None), matching the docstring's
+            # promise that callers see exactly the raw string the document carried.
+            yield el.get(_FLDCHARTYPE, ""), el
         else:
             yield INSTR, el

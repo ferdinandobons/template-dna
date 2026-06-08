@@ -5,7 +5,8 @@ The resolver maps semantic roles to the concrete resolver op the *shell*
 exposes, dispatching on the profile ``kind``:
 
   - ``docx`` -> ``named_style``   (``{"type", "style_id", "style_name"}``)
-  - ``pptx`` -> ``placeholder``   (``{"type", "layout", "ph_idx", "ph_type"}``)
+  - ``pptx`` -> ``placeholder`` (``{"type", "layout", "ph_idx", "ph_type"}``) or
+                 ``named_style`` (both are legal for pptx per the schema)
   - ``xlsx`` -> ``named_range`` | ``cell_style`` | ``number_format``
                  (``{"type", "name"}`` / ``{"type", "style_name"}`` /
                   ``{"type", "number_format"}``)
@@ -177,6 +178,10 @@ class ProfileResolver:
                 schema.role_id("callout", block.intent), fallback="paragraph"
             )
         if isinstance(block, ir.ListBlock):
+            # API-completeness only: the docx generator resolves lists PER ITEM via
+            # resolve_list_item (it needs each item's level), so this whole-block
+            # branch is not exercised by the generators - it returns the level-1
+            # default so a direct resolve_block(ListBlock) caller still gets a list op.
             return self.resolve_list_item(block, None)
         if isinstance(block, ir.Table):
             return self.resolve_role(

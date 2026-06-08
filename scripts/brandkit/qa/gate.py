@@ -64,17 +64,21 @@ def run_qa(
             real env-aware renderer is used. Default None keeps every existing
             call identical.
     """
-    findings = checks_deterministic.check_profile(profile)
-    # The per-format checks also receive the brand ``shell`` so they can run the
-    # shell-vs-output structural diffs (formula preservation, component survival)
-    # that no text scan can detect. ``shell`` is None at verify time (no output to
-    # diff), and those diffs no-op on a missing file, so this is always safe.
+    # ``check_profile`` runs EXACTLY ONCE: the per-format checks call it internally,
+    # so when one of them runs (target present) calling it here too would
+    # double-validate. Run it standalone only when no format-specific check applies
+    # (verify time / target None / unknown kind). The per-format checks also receive
+    # the brand ``shell`` for the shell-vs-output structural diffs (formula
+    # preservation, component survival) that no text scan can detect; ``shell`` is
+    # None at verify time and those diffs no-op on a missing file, so this is safe.
     if target is not None and profile.get("kind") == "docx":
         findings = checks_deterministic.check_docx(target, profile, shell=shell)
     elif target is not None and profile.get("kind") == "pptx":
         findings = checks_deterministic.check_pptx(target, profile, shell=shell)
     elif target is not None and profile.get("kind") == "xlsx":
         findings = checks_deterministic.check_xlsx(target, profile, shell=shell)
+    else:
+        findings = checks_deterministic.check_profile(profile)
 
     # Format-agnostic OPC integrity backstop: a generated package with duplicate
     # ZIP part names is corrupt (Office repair dialog). No-ops at verify time / on a
@@ -196,7 +200,9 @@ def _run_visual_audit(
                             f"visual fallback render failed: {detail}",
                         )
                     )
-                    findings.extend(vqa.check_page_count_sane(png_paths))
+                    # ``visual.render_failed`` already signals zero pages here; do
+                    # NOT also run check_page_count_sane (it would add a redundant
+                    # ``visual.no_pages`` WARNING for the same root cause).
             else:
                 findings.append(
                     Finding(

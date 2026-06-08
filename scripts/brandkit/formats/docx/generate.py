@@ -319,7 +319,7 @@ def _add_runs(para, runs) -> None:
     for r in runs or []:
         text = str(r.get("t", ""))
         link = r.get("link")
-        if link:
+        if link and text:
             _add_hyperlink(para, link, text, r)
         elif text:
             _apply_run_toggles(para.add_run(text), r)
@@ -601,40 +601,38 @@ def _fill_row(
         c_cursor += cspan
 
 
-def _as_cell(run):
-    """Wrap a header-row run (a plain run dict) in a TableCell-like shim."""
-    return ir.TableCell(runs=[run])
+def _as_cell(col):
+    """Wrap a header column in a ``TableCell`` shim. ``col`` is a run-list (the
+    shape ``Table.from_dict`` produces, so multi-run header emphasis survives); a
+    bare run dict / string from a direct construction is tolerated."""
+    runs = col if isinstance(col, list) else [col]
+    return ir.TableCell(runs=runs)
+
+
+def _apply_style(doc, target_obj, op, findings: list[Finding], *, label: str) -> None:
+    """Apply a resolved role's style to a paragraph OR a table (both expose
+    ``.style``). A role that names a resolver but resolves to no shell style is a
+    brand breach: be LOUD (ERROR) instead of silently leaving the default style.
+    The single implementation behind ``_apply_resolved_style`` / ``_apply_table_style``."""
+    style = lookup_style(doc, op.resolver)
+    if style is not None:
+        target_obj.style = style
+        return
+    if op.resolver:
+        target = op.resolver.get("style_id") or op.resolver.get("style_name")
+        findings.append(
+            Finding(
+                "resolver_targets_exist",
+                schema.Severity.ERROR.value,
+                f"{label}role {op.role_id!r} resolves to style {target!r} "
+                "which is not in the shell",
+            )
+        )
 
 
 def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:
-    style = lookup_style(doc, op.resolver)
-    if style is not None:
-        para.style = style
-        return
-    # A role that names a resolver but resolves to no shell style is a brand
-    # breach: be LOUD (ERROR) instead of silently leaving the paragraph as Normal.
-    if op.resolver:
-        target = op.resolver.get("style_id") or op.resolver.get("style_name")
-        findings.append(
-            Finding(
-                "resolver_targets_exist",
-                schema.Severity.ERROR.value,
-                f"role {op.role_id!r} resolves to style {target!r} which is not in the shell",
-            )
-        )
+    _apply_style(doc, para, op, findings, label="")
 
 
 def _apply_table_style(doc, table, op, findings: list[Finding]) -> None:
-    style = lookup_style(doc, op.resolver)
-    if style is not None:
-        table.style = style
-        return
-    if op.resolver:
-        target = op.resolver.get("style_id") or op.resolver.get("style_name")
-        findings.append(
-            Finding(
-                "resolver_targets_exist",
-                schema.Severity.ERROR.value,
-                f"table role {op.role_id!r} resolves to style {target!r} which is not in the shell",
-            )
-        )
+    _apply_style(doc, table, op, findings, label="table ")

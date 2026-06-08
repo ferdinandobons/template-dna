@@ -490,7 +490,11 @@ def _derive_skeleton_attrs(profile: dict, comp: dict) -> None:
     for region in skeleton:
         if not isinstance(region, dict):
             continue
-        rid = region.get("id") or region.get("region_ref")
+        # Skeleton regions are keyed by ``region`` (their region id, e.g.
+        # ``section.toc``); match that against the comprehension's region_refs.
+        # (The old ``id``/``region_ref`` lookup was always None, so demo/required
+        # were never annotated onto the skeleton.)
+        rid = region.get("region")
         if rid in demo_refs:
             region["demo"] = True
         if rid in required_refs:

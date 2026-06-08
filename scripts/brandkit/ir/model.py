@@ -210,7 +210,10 @@ class Table(Block):
     """A table. Resolves to ``table.{role}`` + a header style."""
 
     TYPE: ClassVar[str] = "table"
-    columns: list[Run] = field(default_factory=list)  # header-row cells (rich)
+    # Header-row cells, each a RICH run-list (``from_dict`` normalizes every column
+    # to one, preserving multi-run emphasis). A bare run dict / string from a direct
+    # construction is tolerated by the writers. ``[]`` means no header row.
+    columns: list = field(default_factory=list)
     rows: list[list[TableCell]] = field(default_factory=list)
     caption: Optional[list[Run]] = None
     role: str = "default"
@@ -227,8 +230,15 @@ class Table(Block):
 
     @classmethod
     def from_dict(cls, data: dict) -> "Table":
+        # Keep EVERY run of each column header (not just the first) so multi-run
+        # emphasis in a header survives the round-trip; each column becomes a
+        # run-list, mirroring how a body TableCell holds its runs. The same loose
+        # shapes a cell accepts are accepted: a string, a single run dict, a
+        # run-list, or a ``{"runs": [...]}`` / ``{"text": "..."}`` wrapper.
         columns = [
-            textutil.normalize_runs(c)[0] if textutil.normalize_runs(c) else {"t": ""}
+            textutil.normalize_runs(c.get("runs"), text=c.get("text"))
+            if isinstance(c, dict) and ("runs" in c or "text" in c)
+            else textutil.normalize_runs(c)
             for c in (data.get("columns") or [])
         ]
         rows = [

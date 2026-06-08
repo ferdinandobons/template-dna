@@ -257,7 +257,7 @@ def has_part(src: PathLike, part_name: str) -> bool:
     name = part_name.lstrip("/")
     try:
         with zipfile.ZipFile(Path(src), "r") as zf:
-            return name in set(zf.namelist())
+            return name in zf.namelist()
     except zipfile.BadZipFile as exc:
         raise PackError(f"{src} is not a valid OOXML/ZIP package") from exc
 
