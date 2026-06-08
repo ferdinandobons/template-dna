@@ -148,7 +148,42 @@ def generate(
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
     prs.save(out)
+    _normalize_for_idempotency(out)
     return out
+
+
+def _normalize_for_idempotency(path: Path) -> None:
+    """Re-zip the saved pptx with a FIXED entry timestamp so two identical
+    generations are byte-identical (the pptx peer of the xlsx idempotency fix).
+
+    python-pptx stamps the wall clock into every ZIP entry header at save time; the
+    package ``dcterms:modified`` is already pinned (see ``_PINNED_MODIFIED``), so
+    only the ZIP timestamps remain non-deterministic and can make two near-identical
+    generations differ by a byte when they straddle the DOS-time 2-second boundary.
+    This rewrites the archive with the same ``(1980,1,1,0,0,0)`` timestamp
+    ``ooxml.pack`` uses, preserving part bytes and order. A rewrite failure is
+    tolerated and never corrupts the file: the already-saved package stays in place.
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path, "r") as zin:
+            names = zin.namelist()
+            parts = {name: zin.read(name) for name in names}
+    except (OSError, zipfile.BadZipFile):
+        return
+
+    fixed_date = (1980, 1, 1, 0, 0, 0)
+    try:
+        tmp = path.with_name(path.name + ".tmp")
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+            for name in names:  # preserve part order so the central directory is stable
+                info = zipfile.ZipInfo(name, date_time=fixed_date)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                zout.writestr(info, parts[name])
+        tmp.replace(path)
+    except OSError:
+        return
 
 
 def _check_component_survival(before: dict, after: dict) -> list[Finding]:
