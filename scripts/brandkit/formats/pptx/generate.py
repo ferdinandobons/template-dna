@@ -49,7 +49,7 @@ from the QA side.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -88,6 +88,10 @@ class BodyLine:
 
     text: str
     indent: int = 0
+    # The rich IR runs behind ``text`` (bold/italic/underline/link). When present the
+    # writer emits real runs preserving inline emphasis; ``text`` stays the flattened
+    # form so the capacity split keeps measuring display width by length.
+    runs: list = field(default_factory=list)
 
     def __len__(self) -> int:  # capacity split measures display width by text length
         return len(self.text)
@@ -674,7 +678,9 @@ def _write_body_lines(body, lines: list[BodyLine]) -> None:
     for extra in list(tf.paragraphs[1:]):
         extra._p.getparent().remove(extra._p)
     first = tf.paragraphs[0]
-    if first.runs:
+    if lines[0].runs:
+        _set_para_runs(first, lines[0].runs)
+    elif first.runs:
         first.runs[0].text = lines[0].text
         for r in first.runs[1:]:
             r.text = ""
@@ -683,8 +689,38 @@ def _write_body_lines(body, lines: list[BodyLine]) -> None:
     first.level = max(lines[0].indent, 0)
     for line in lines[1:]:
         para = tf.add_paragraph()
-        para.text = line.text
+        if line.runs:
+            _set_para_runs(para, line.runs)
+        else:
+            para.text = line.text
         para.level = max(line.indent, 0)
+
+
+def _set_para_runs(para, runs) -> None:
+    """Write IR ``runs`` into a pptx paragraph as real runs, preserving inline
+    emphasis (bold/italic/underline) and hyperlinks, instead of a flat string.
+
+    Existing runs are cleared first; the fresh runs inherit the placeholder's brand
+    font and color from the layout's level formatting, and only the author's emphasis
+    toggles + link target are set - never a literal brand font/color (guarantee holds).
+    """
+    for r in list(para.runs):
+        r._r.getparent().remove(r._r)
+    for ir_run in runs or []:
+        text = str(ir_run.get("t", ""))
+        link = ir_run.get("link")
+        if not text and not link:
+            continue
+        run = para.add_run()
+        run.text = text
+        if ir_run.get("b"):
+            run.font.bold = True
+        if ir_run.get("i"):
+            run.font.italic = True
+        if ir_run.get("u"):
+            run.font.underline = True
+        if link:
+            run.hyperlink.address = link
 
 
 # ---------------------------------------------------------------------------
@@ -920,20 +956,22 @@ def _body_lines(blocks: list, sink: list) -> list[BodyLine]:
     lines: list[BodyLine] = []
     for block in blocks:
         if isinstance(block, ir.Paragraph):
-            _append(lines, textutil.runs_to_text(block.runs))
+            _append_runs(lines, block.runs)
         elif isinstance(block, ir.Callout):
             if block.title:
-                _append(lines, textutil.runs_to_text(block.title))
-            _append(lines, textutil.runs_to_text(block.runs))
+                _append_runs(lines, block.title)
+            _append_runs(lines, block.runs)
         elif isinstance(block, ir.Quote):
-            quote = textutil.runs_to_text(block.runs)
+            runs = list(block.runs or [])
             if block.attribution:
-                attribution = textutil.runs_to_text(block.attribution)
+                attribution = list(block.attribution or [])
                 if attribution:
-                    quote = f"{quote} - {attribution}" if quote else attribution
-            _append(lines, quote)
+                    runs = (
+                        (runs + [{"t": " - "}] + attribution) if runs else attribution
+                    )
+            _append_runs(lines, runs)
         elif isinstance(block, ir.Caption):
-            _append(lines, textutil.runs_to_text(block.runs))
+            _append_runs(lines, block.runs)
         elif isinstance(block, ir.ListBlock):
             for item in block.items:
                 _append_list_item(lines, item)
@@ -1011,12 +1049,22 @@ def _append(lines: list[BodyLine], text: str, indent: int = 0) -> None:
         lines.append(BodyLine(text=text, indent=indent))
 
 
+def _append_runs(lines: list[BodyLine], runs, indent: int = 0) -> None:
+    """Append a body line carrying its rich runs (inline emphasis/links preserved)."""
+    text = textutil.runs_to_text(runs)
+    if text:
+        lines.append(BodyLine(text=text, indent=indent, runs=list(runs or [])))
+
+
 def _append_list_item(lines: list[BodyLine], item) -> None:
     text = textutil.runs_to_text(item.runs)
     if text:
         # Real paragraph level (not a string-joined "    • " prefix): the layout's
-        # own list formatting supplies the bullet glyph and indentation.
-        lines.append(BodyLine(text=text, indent=max(item.level, 0)))
+        # own list formatting supplies the bullet glyph and indentation. Carry the
+        # rich runs so inline emphasis/links survive on list items too.
+        lines.append(
+            BodyLine(text=text, indent=max(item.level, 0), runs=list(item.runs or []))
+        )
     for sub in item.items:
         _append_list_item(lines, sub)
 

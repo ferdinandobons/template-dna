@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -31,7 +32,7 @@ from brandkit.qa.model import Finding
 # no-op in the body (the live TOC field is refreshed separately by ``refresh_toc``)
 # so it is degraded as INFO, not WARNING.
 _UNHANDLED_BLOCK_TYPES: frozenset[str] = frozenset(
-    {"image", "kpi", "chart", "smartart", "divider", "component", "section", "toc"}
+    {"image", "kpi", "chart", "smartart", "component", "section", "toc"}
 )
 
 
@@ -254,6 +255,82 @@ def _reconcile_indexes_and_demo(
     return removed
 
 
+def _apply_run_toggles(run, r: dict) -> None:
+    """Apply inline emphasis from an IR run to a docx run.
+
+    Only character-level toggles (``w:b``/``w:i``/``w:u``/strike/super-/subscript) -
+    author intent, NOT a brand style/font/color - are applied, so the brand
+    guarantee (generators never write a literal style/hex/font) is untouched. The
+    run still inherits the paragraph style's brand font and color. A ``code`` toggle
+    carries no brand-safe typeface (a monospace family would be a literal font), so
+    it is rendered as plain text rather than fabricating one.
+    """
+    if r.get("b"):
+        run.bold = True
+    if r.get("i"):
+        run.italic = True
+    if r.get("u"):
+        run.underline = True
+    if r.get("strike"):
+        run.font.strike = True
+    if r.get("sup"):
+        run.font.superscript = True
+    if r.get("sub"):
+        run.font.subscript = True
+
+
+def _add_hyperlink(para, url: str, text: str, r: dict) -> None:
+    """Append a real ``w:hyperlink`` (external relationship) carrying ``text``.
+
+    The link target is the author's URL (content, not brand), wired through a
+    package relationship. The visible run keeps the author's inline emphasis; we do
+    not inject a literal ``Hyperlink`` character style or color (brand guarantee).
+    """
+    r_id = para.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+    run = OxmlElement("w:r")
+    if any(r.get(k) for k in ("b", "i", "u", "strike", "sup", "sub")):
+        rpr = OxmlElement("w:rPr")
+        for key, tag in (("b", "w:b"), ("i", "w:i"), ("strike", "w:strike")):
+            if r.get(key):
+                rpr.append(OxmlElement(tag))
+        if r.get("u"):
+            u = OxmlElement("w:u")
+            u.set(qn("w:val"), "single")
+            rpr.append(u)
+        if r.get("sup") or r.get("sub"):
+            va = OxmlElement("w:vertAlign")
+            va.set(qn("w:val"), "superscript" if r.get("sup") else "subscript")
+            rpr.append(va)
+        run.append(rpr)
+    t = OxmlElement("w:t")
+    t.set(qn("xml:space"), "preserve")
+    t.text = text
+    run.append(t)
+    hyperlink.append(run)
+    para._p.append(hyperlink)
+
+
+def _add_runs(para, runs) -> None:
+    """Write IR ``runs`` into ``para`` as real docx runs, preserving inline emphasis
+    and hyperlinks, instead of flattening to a single plain run."""
+    for r in runs or []:
+        text = str(r.get("t", ""))
+        link = r.get("link")
+        if link:
+            _add_hyperlink(para, link, text, r)
+        elif text:
+            _apply_run_toggles(para.add_run(text), r)
+
+
+def _para_with_runs(doc, runs):
+    """Add a paragraph carrying ``runs`` as real, formatting-preserving docx runs."""
+    para = doc.add_paragraph()
+    _add_runs(para, runs)
+    return para
+
+
 def _write_block(
     doc,
     profile: dict,
@@ -262,34 +339,48 @@ def _write_block(
     findings: list[Finding],
 ) -> None:
     if isinstance(block, ir.Heading):
-        para = doc.add_paragraph(textutil.runs_to_text(block.runs))
+        para = _para_with_runs(doc, block.runs)
         _apply_resolved_style(doc, para, resolver.resolve_block(block), findings)
     elif isinstance(block, ir.Paragraph):
-        para = doc.add_paragraph(textutil.runs_to_text(block.runs))
+        para = _para_with_runs(doc, block.runs)
         _apply_resolved_style(doc, para, resolver.resolve_block(block), findings)
     elif isinstance(block, ir.Callout):
-        text = textutil.runs_to_text(block.runs)
+        para = doc.add_paragraph()
         if block.title:
-            text = textutil.runs_to_text(block.title) + "\n" + text
-        para = doc.add_paragraph(text)
+            _add_runs(para, block.title)
+            para.add_run().add_break()  # title above body, same callout paragraph
+        _add_runs(para, block.runs)
         _apply_resolved_style(doc, para, resolver.resolve_block(block), findings)
     elif isinstance(block, ir.ListBlock):
         _write_list_items(doc, resolver, block, block.items, findings)
     elif isinstance(block, ir.Table):
         _write_table(doc, resolver, block, findings)
     elif isinstance(block, ir.Caption):
-        para = doc.add_paragraph(textutil.runs_to_text(block.runs))
+        para = _para_with_runs(doc, block.runs)
         _apply_resolved_style(doc, para, resolver.resolve_block(block), findings)
     elif isinstance(block, ir.Quote):
-        para = doc.add_paragraph(textutil.runs_to_text(block.runs))
+        para = _para_with_runs(doc, block.runs)
         _apply_resolved_style(doc, para, resolver.resolve_block(block), findings)
         if block.attribution:
-            attr = doc.add_paragraph(textutil.runs_to_text(block.attribution))
+            attr = _para_with_runs(doc, block.attribution)
             _apply_resolved_style(
                 doc, attr, resolver.resolve_role("paragraph"), findings
             )
     elif isinstance(block, ir.PageBreak):
         doc.add_page_break()
+    elif isinstance(block, ir.Divider):
+        # Native horizontal rule: an empty paragraph carrying a bottom border. Color
+        # is OOXML "auto" (resolves to the theme's text color) - never a literal hex,
+        # so the brand guarantee holds without a profile-defined divider artifact.
+        para = doc.add_paragraph()
+        pbdr = OxmlElement("w:pBdr")
+        bottom = OxmlElement("w:bottom")
+        bottom.set(qn("w:val"), "single")
+        bottom.set(qn("w:sz"), "6")
+        bottom.set(qn("w:space"), "1")
+        bottom.set(qn("w:color"), "auto")
+        pbdr.append(bottom)
+        para._p.get_or_add_pPr().append(pbdr)
     elif block.TYPE in _UNHANDLED_BLOCK_TYPES:
         # No writer for this block in the M1 docx vertical. Skip cleanly - NEVER
         # emit a blank ``Normal`` paragraph - and record a degradation finding so
@@ -325,7 +416,7 @@ def _write_list_items(doc, resolver, block, items, findings) -> None:
     """
     for item in items:
         op = resolver.resolve_list_item(block, item)
-        para = doc.add_paragraph(textutil.runs_to_text(item.runs))
+        para = _para_with_runs(doc, item.runs)
         _apply_resolved_style(doc, para, op, findings)
         _apply_list_numbering(para, op, item)
         if item.items:
@@ -394,7 +485,7 @@ def _write_table(doc, resolver, block, findings) -> None:
     for r_idx, row in enumerate(block.rows):
         _fill_row(doc, table, r_idx + row_offset, row, header_op, findings)
     if block.caption:
-        para = doc.add_paragraph(textutil.runs_to_text(block.caption))
+        para = _para_with_runs(doc, block.caption)
         _apply_resolved_style(doc, para, resolver.resolve_role("caption"), findings)
 
 
@@ -415,7 +506,9 @@ def _fill_row(
             end_c = min(c_cursor + cspan - 1, ncols - 1)
             end_r = min(r_idx + rspan - 1, len(table.rows) - 1)
             anchor = anchor.merge(table.cell(end_r, end_c))
-        anchor.text = textutil.runs_to_text(cell.runs)
+        # Run-aware cell text: a fresh cell has one empty paragraph; write the IR
+        # runs into it so inline emphasis/links survive (not a flattened cell.text).
+        _add_runs(anchor.paragraphs[0], cell.runs)
         if (
             (force_header or getattr(cell, "header", False))
             and header_op is not None
