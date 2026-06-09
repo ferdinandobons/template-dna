@@ -1882,5 +1882,73 @@ class DeterministicCoverSubtitleFillTest(unittest.TestCase):
         self.assertIn("subtitle", notes)  # honestly surfaced, never silently dropped
 
 
+# ---------------------------------------------------------------------------
+# Malformed section measures: some editors emit non-integer twips (e.g.
+# '1440.0000000000002'). python-docx parses measures with int() and raises the
+# moment ANY code (ours or its own internals, e.g. add_table's width math) reads
+# the section measure. Extraction/generation must survive a real template like this.
+# ---------------------------------------------------------------------------
+def _shell_with_malformed_margin(path, *, raw="1440.0000000000002"):
+    """A shell whose body sectPr/pgMar carries a non-integer twips left/right."""
+    doc = Document()
+    doc.add_paragraph("x", style="Heading 1")
+    sectPr = doc.element.body.find(qn("w:sectPr"))
+    pgMar = sectPr.find(qn("w:pgMar"))
+    if pgMar is None:
+        pgMar = OxmlElement("w:pgMar")
+        sectPr.append(pgMar)
+    pgMar.set(qn("w:left"), raw)
+    pgMar.set(qn("w:right"), raw)
+    doc.save(path)
+    return path
+
+
+class MalformedSectionMeasureTest(unittest.TestCase):
+    def test_section_helpers_tolerate_malformed_twips(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = _shell_with_malformed_margin(Path(td) / "shell.docx")
+            doc = Document(shell)
+            section = doc.sections[-1]
+            # The raw python-docx property raises; our reader recovers the value.
+            with self.assertRaises(ValueError):
+                _ = section.left_margin
+            left = structure.section_length_emu(section, "left_margin")
+            self.assertEqual(left, 914400)  # round(1440.0000000000002 * 635) EMU
+            self.assertGreater(structure.section_content_width_emu(section), 0)
+
+    def test_sanitize_repairs_malformed_twips_in_place(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = _shell_with_malformed_margin(Path(td) / "shell.docx")
+            doc = Document(shell)
+            repaired = structure.sanitize_section_measures(doc)
+            self.assertGreaterEqual(repaired, 2)  # left + right
+            section = doc.sections[-1]
+            # After repair, python-docx parses the measure without raising.
+            self.assertEqual(int(section.left_margin), 914400)
+
+    def test_generate_with_table_survives_malformed_margin(self):
+        # The exact regression: a Table block makes python-docx derive the table
+        # width from section.left_margin inside add_table; a malformed margin used
+        # to crash the whole generation. It must now produce a file cleanly.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = _shell_with_malformed_margin(Path(td) / "shell.docx")
+            out = Path(td) / "out.docx"
+            prof = _docx_profile({"_index": []})
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table.from_dict({"columns": ["A", "B"], "rows": [["1", "2"]]})
+                ]
+            )
+            findings: list[Finding] = []
+            docx_generate.generate(prof, shell, idoc, out, findings=findings)
+            self.assertTrue(out.is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -119,15 +119,17 @@ def _artifact_catalog(path: Path, doc, parts: list[str]) -> dict:
     out["ooxml_parts"] = parts
     out["styles"] = _style_names(doc)
     out["style_details"] = _style_details(doc)
+    # ``structure.section_length_emu`` is robust to malformed twips attributes
+    # (some editors emit non-integer twips that make python-docx raise on access).
     out["sections"] = [
         {
-            "page_width_emu": int(section.page_width or 0),
-            "page_height_emu": int(section.page_height or 0),
+            "page_width_emu": structure.section_length_emu(section, "page_width"),
+            "page_height_emu": structure.section_length_emu(section, "page_height"),
             "margins_emu": {
-                "top": int(section.top_margin or 0),
-                "right": int(section.right_margin or 0),
-                "bottom": int(section.bottom_margin or 0),
-                "left": int(section.left_margin or 0),
+                "top": structure.section_length_emu(section, "top_margin"),
+                "right": structure.section_length_emu(section, "right_margin"),
+                "bottom": structure.section_length_emu(section, "bottom_margin"),
+                "left": structure.section_length_emu(section, "left_margin"),
             },
         }
         for section in doc.sections

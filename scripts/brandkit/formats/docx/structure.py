@@ -50,6 +50,100 @@ W_NS = NAMESPACES["w"]
 w = make_qn("w")
 
 
+# 1 twip = 635 EMU. Used only to recover a section length when python-docx refuses
+# to parse a malformed twips attribute: some editors emit non-integer twips such as
+# '1440.0000000000002', which makes python-docx raise ValueError the moment the
+# section property is accessed.
+_TWIPS_TO_EMU = 635
+_PGSZ_ATTR = {"page_width": "w", "page_height": "h"}
+_PGMAR_ATTR = {
+    "top_margin": "top",
+    "right_margin": "right",
+    "bottom_margin": "bottom",
+    "left_margin": "left",
+}
+
+
+def section_length_emu(section, attr: str) -> int:
+    """Read a section length (``page_width`` / ``page_height`` / ``*_margin``) in
+    EMU, tolerating malformed measure attributes.
+
+    python-docx raises ``ValueError`` on access when a twips attribute is a
+    non-integer decimal. In that case parse the raw twips off the ``w:pgSz`` /
+    ``w:pgMar`` element and convert to EMU ourselves; fall back to 0 only when the
+    element/attribute is genuinely absent or unparseable.
+    """
+    try:
+        value = getattr(section, attr)
+        return int(value) if value is not None else 0
+    except (ValueError, TypeError):
+        pass
+    if attr in _PGSZ_ATTR:
+        element = section._sectPr.find(w("pgSz"))
+        local = _PGSZ_ATTR[attr]
+    else:
+        element = section._sectPr.find(w("pgMar"))
+        local = _PGMAR_ATTR[attr]
+    if element is None:
+        return 0
+    raw = element.get(w(local))
+    try:
+        return round(float(raw) * _TWIPS_TO_EMU)
+    except (TypeError, ValueError):
+        return 0
+
+
+def section_content_width_emu(section) -> int:
+    """Printable content width in EMU: page width minus left/right margins, robust
+    to malformed margin attributes (see :func:`section_length_emu`)."""
+    return (
+        section_length_emu(section, "page_width")
+        - section_length_emu(section, "left_margin")
+        - section_length_emu(section, "right_margin")
+    )
+
+
+_PGMAR_LOCALS = ("top", "right", "bottom", "left", "header", "footer", "gutter")
+_PGSZ_LOCALS = ("w", "h")
+
+
+def sanitize_section_measures(doc) -> int:
+    """Round any non-integer twips on every section's ``w:pgMar`` / ``w:pgSz`` to an
+    integer, in place. Returns the count of attributes repaired.
+
+    Some editors emit non-integer twips such as ``'1440.0000000000002'``. python-docx
+    parses these measures with ``int()`` and raises ``ValueError`` the moment *any*
+    code touches the section measure - including its own internals (e.g.
+    ``Document.add_table`` derives the table width from ``section.left_margin``). A
+    defensive read at our own call sites is therefore not enough; the value has to be
+    repaired on the element so the whole python-docx surface stays usable. The
+    rounding is sub-twip (< 1/1440 inch), so the page geometry is visually identical;
+    it only removes a malformed value python-docx refuses to parse.
+    """
+    repaired = 0
+    for sectPr in doc.element.body.iter(w("sectPr")):
+        for tag, locals_ in ((w("pgMar"), _PGMAR_LOCALS), (w("pgSz"), _PGSZ_LOCALS)):
+            element = sectPr.find(tag)
+            if element is None:
+                continue
+            for local in locals_:
+                key = w(local)
+                raw = element.get(key)
+                if raw is None:
+                    continue
+                try:
+                    int(raw)
+                    continue  # already a clean integer twips value
+                except ValueError:
+                    pass
+                try:
+                    element.set(key, str(round(float(raw))))
+                    repaired += 1
+                except (TypeError, ValueError):
+                    pass
+    return repaired
+
+
 # Multilingual "contents" words (EN/IT/FR/DE/ES). Lowercased; matched against the
 # stripped, lowercased text of a heading paragraph. Brand-agnostic.
 TOC_HEADING_WORDS: frozenset[str] = frozenset(

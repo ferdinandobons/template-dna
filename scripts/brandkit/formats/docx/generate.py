@@ -65,6 +65,11 @@ def generate(
     idoc = components.expand_components(idoc, profile)
     doc = Document(shell_path)
 
+    # Repair any malformed section measures (non-integer twips some editors emit)
+    # before any python-docx access - including python-docx internals like
+    # add_table's width computation - can choke on them.
+    structure.sanitize_section_measures(doc)
+
     # Order-aware body replacement: remove ONLY the freeform body region, keeping
     # the ordered cover and TOC regions (and the final sectPr) in place. New
     # content is appended into the now-empty body region - immediately before the
@@ -498,7 +503,7 @@ def _write_image(doc, resolver, block, findings) -> None:
         width = (
             Emu(int(block.width_emu))
             if block.width_emu
-            else sec.page_width - sec.left_margin - sec.right_margin
+            else Emu(structure.section_content_width_emu(sec))
         )
         height = Emu(int(block.height_emu)) if block.height_emu else None
         try:
@@ -612,7 +617,7 @@ def _write_chart(doc, block, findings) -> None:
     # final ``w:sectPr`` (appending to the body directly would place it after, which
     # is invalid).
     sec = doc.sections[-1]
-    cx = int(sec.page_width - sec.left_margin - sec.right_margin)
+    cx = structure.section_content_width_emu(sec)
     cy = int(cx * 2 / 3)
     drawing = (
         f'<w:drawing xmlns:w="{_NS_W}" xmlns:wp="{_NS_WP}" xmlns:a="{_NS_A}" '
