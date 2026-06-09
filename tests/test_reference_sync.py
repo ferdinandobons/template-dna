@@ -90,6 +90,10 @@ class SharedComprehensionPromptTest(unittest.TestCase):
             "demo|real|mixed",
             # The reusable-fragment proposal's closed `kind` enum.
             "component|section",
+            # The L2 visual-audit verdict's closed enum (Cluster C1).
+            "PASS|FAIL|NA",
+            # The model-assisted QA-triage disposition's closed enum (Cluster C2).
+            "expected|defect",
         ):
             self.assertIn(enum_values, text)
 
@@ -128,6 +132,46 @@ class SkillSpineTest(unittest.TestCase):
             text = _skill_md(skill).read_text(encoding="utf-8")
             self.assertIn("source_shell_sha256", text)
             self.assertIn("provenance.shell.sha256", text)
+
+    def test_each_skill_states_end_of_generation_feedback_rule(self) -> None:
+        # Cluster C3 / ROADMAP §3 / MEMORY constraint: the feedback ask must be
+        # documented in every SKILL.md as END-OF-GENERATION only, inviting TEXT or a
+        # SCREENSHOT, and improving FUTURE generations (never the just-produced file).
+        for skill in SKILLS:
+            text = _skill_md(skill).read_text(encoding="utf-8")
+            lower = text.lower()
+            self.assertIn(
+                "## feedback (end of generation)",
+                lower,
+                f"{skill} SKILL.md must document the end-of-generation feedback step",
+            )
+            # End-of-generation only (never before/during).
+            self.assertIn("only after", lower, f"{skill} feedback not gated to after")
+            # Text or screenshot.
+            self.assertIn("screenshot", lower, f"{skill} feedback omits screenshot")
+            self.assertIn("text or", lower, f"{skill} feedback omits text-or option")
+            # Improves FUTURE generations only.
+            self.assertIn("future", lower, f"{skill} feedback omits future-only rule")
+            # And names the refine verb that carries the answer back.
+            self.assertIn("refine --name", text, f"{skill} feedback omits refine verb")
+
+
+class RefineReferenceTest(unittest.TestCase):
+    """The shared (byte-identical) comprehension reference documents the refine verb."""
+
+    def test_reference_documents_the_refine_verb(self) -> None:
+        text = _comp_md("brand-docx").read_text(encoding="utf-8")
+        self.assertIn("refine --name", text)
+        # The future-only / text-or-screenshot constraint lives in the shared body too.
+        lower = text.lower()
+        self.assertIn("screenshot", lower)
+        self.assertIn("future", lower)
+
+    def test_refine_reference_stays_byte_identical(self) -> None:
+        bodies = {skill: _comp_md(skill).read_bytes() for skill in SKILLS}
+        canonical = bodies["brand-docx"]
+        for skill in SKILLS:
+            self.assertEqual(bodies[skill], canonical, f"{skill} reference drifted")
 
 
 class ReferenceDocFreshnessTest(unittest.TestCase):

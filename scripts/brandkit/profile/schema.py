@@ -213,6 +213,51 @@ class Verdict(str, Enum):
     MIXED = "mixed"
 
 
+class AuditVerdict(str, Enum):
+    """The closed L2 visual-audit disposition the model may write (Cluster C1).
+
+    Keyed by a ``visual_manifest.json`` ``checklist[*].id``, this is the ONLY value
+    the model writes into the ``comprehension.audit`` sink. Each maps to exactly one
+    short-circuit branch:
+
+    ``PASS`` - the rendered artifact satisfies the checklist item; combined with a
+               matching ``(shell_sha256, content_sha256)`` it lets a same-shell /
+               same-content ``generate`` skip the L2 render+manifest round.
+    ``FAIL`` - the item failed; ALWAYS forces a full L2 re-render (never
+               short-circuited).
+    ``NA``   - not applicable for this artifact; also forces a full L2 round (the
+               short-circuit requires every current item at ``PASS``).
+
+    Closed because each value maps to a real engine branch, mirroring
+    :class:`Verdict` / :class:`ComprehensionStatus`.
+    """
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NA = "NA"
+
+
+class TriageDisposition(str, Enum):
+    """The closed model-assisted QA-triage disposition (Cluster C2).
+
+    The ONLY value the model writes into a ``comprehension.triage`` entry. Each maps
+    to exactly one branch in ``qa.gate._apply_triage`` and, by deliberate design,
+    NEITHER value can raise severity or touch anything but a WARNING:
+
+    ``expected`` - the model confirms the matched AMBIGUOUS WARNING is an intended
+                   property of this template (e.g. a full-bleed cover that the
+                   edge-bleed proxy flags); demote that one WARNING to INFO.
+    ``defect``   - the model agrees the WARNING is a real defect; keep it verbatim.
+
+    There is intentionally no value that lowers an ERROR or raises severity, so a
+    triage entry can NEVER mask a real ERROR. Closed because each value maps to a
+    real engine branch, mirroring :class:`AuditVerdict` / :class:`Verdict`.
+    """
+
+    EXPECTED = "expected"
+    DEFECT = "defect"
+
+
 class FragmentKind(str, Enum):
     """Which reusable-fragment registry a comprehension proposal feeds.
 
@@ -287,6 +332,25 @@ DEFAULT_L0_INVARIANTS: tuple[str, ...] = (
     # a profile with no (or an absent) comprehension block, so it is safe for the
     # model-free CI path and for pptx/xlsx.
     "comprehension_targets_exist",
+    # Fail-closed membership of every persisted L2 visual-AUDIT verdict key against
+    # the profile-derived visual checklist (Cluster C1). Wired into ``run_qa`` next
+    # to ``comprehension_targets_exist`` in the SAME change that added the audit sink
+    # (the invariant list is documentation; ``run_qa`` / ``check_audit_targets`` is
+    # the enforcement). ERRORs on an audit key that is not a current checklist id and
+    # rejects-never-skips on an empty derived checklist. No-ops on a profile with no
+    # (or an absent) comprehension block, so it is safe for the model-free CI path
+    # and for all three formats.
+    "audit_targets_exist",
+    # Fail-closed membership of every model-assisted QA-TRIAGE entry against the
+    # closed eligible-check set + uniqueness of its (check, location) pair (Cluster
+    # C2). Wired into ``run_qa`` next to ``audit_targets_exist`` in the SAME change
+    # that added the triage sink (the invariant list is documentation; ``run_qa`` /
+    # ``check_triage_targets`` is the enforcement). ERRORs on a triage entry naming a
+    # non-eligible check or a duplicate (check, location). No-ops on a profile with no
+    # (or an absent) comprehension block, so it is safe for the model-free CI path and
+    # for all three formats. A triage entry can NEVER demote an ERROR: the eligible
+    # set is WARNING-only and ``_apply_triage`` guards on ``severity == WARNING``.
+    "triage_targets_exist",
     # Fail-closed membership of every LEARNED override target against the surfaced
     # deterministic inventories (Cluster B). Wired into ``run_qa`` next to
     # ``comprehension_targets_exist`` in the SAME change that added the override
@@ -976,6 +1040,20 @@ COMPREHENSION_STATUSES: frozenset[str] = frozenset(e.value for e in Comprehensio
 FILL_RULES: frozenset[str] = frozenset(e.value for e in FillRule)
 RECONCILE_RULES: frozenset[str] = frozenset(e.value for e in Reconcile)
 VERDICTS: frozenset[str] = frozenset(e.value for e in Verdict)
+# Closed disposition the L2 model writes into ``comprehension.audit`` (Cluster C1).
+AUDIT_VERDICTS: frozenset[str] = frozenset(e.value for e in AuditVerdict)
+# Closed disposition the model writes into a ``comprehension.triage`` entry (C2).
+TRIAGE_DISPOSITIONS: frozenset[str] = frozenset(e.value for e in TriageDisposition)
+# The ONLY check ids a triage entry may name (Cluster C2). DELIBERATELY restricted
+# to WARNING-only, genuinely-ambiguous proxies: a full-bleed cover the edge-bleed
+# proxy flags, a deliberately blank section page, a legitimately-dropped native
+# component family. NONE of these is an ERROR-emitting check, so a triage entry can
+# never even be aimed at an ERROR (it is rejected at merge as a non-member) - the
+# belt to ``_apply_triage``'s ``severity == WARNING`` suspenders. Closed: a check id
+# joins this set ONLY when its findings are WARNING-only and genuinely ambiguous.
+AMBIGUOUS_TRIAGE_CHECKS: frozenset[str] = frozenset(
+    {"visual.blank_page", "visual.edge_bleed", "component_survival"}
+)
 FRAGMENT_KINDS: frozenset[str] = frozenset(e.value for e in FragmentKind)
 # Closed enum for a caption index's content TARGET: which captionable kind feeds it
 # (a list-of-tables is fed by table captions, a list-of-figures by figure captions).
@@ -1027,6 +1105,26 @@ def empty_comprehension() -> dict:
         # are mirrored onto ``theme.palette[key]`` (the derived sink). Empty is the
         # norm; the model never writes ``ref`` / a hex.
         "palette_annotations": {},
+        # Additive (Cluster C1): the persisted L2 visual-audit verdict map, keyed by a
+        # ``visual_manifest.json`` checklist id. Each value is { verdict: PASS|FAIL|NA,
+        # evidence?, shell_sha256?, content_sha256? }. The model never writes a brand
+        # value here - only a closed disposition against a structural checklist id it
+        # did not author. Empty is the norm; a same-shell/same-content generate
+        # short-circuits L2 only when EVERY current checklist id PASSes at a matching
+        # sha pair. (Omitting this key would silently drop the verdict in
+        # ``_canonicalize``, which rebuilds from this empty block.)
+        "audit": {},
+        # Additive (Cluster C2): the model-assisted QA-triage list. Each entry is
+        # { check, location, disposition: expected|defect, evidence? } naming exactly
+        # one AMBIGUOUS WARNING the model judged. On a clean merge ``_canonicalize``
+        # copies it sorted; ``qa.gate._apply_triage`` is the SOLE consumer, demoting a
+        # matched WARNING to INFO iff disposition==expected. The model never writes a
+        # brand value here, only a closed disposition + advisory evidence against a
+        # closed (check, location) pair; an ERROR can NEVER be demoted (no enum value
+        # lowers an ERROR, and the eligible-check set is WARNING-only). Empty is the
+        # norm. (Omitting this key would silently drop triage in ``_canonicalize``,
+        # which rebuilds from this empty block.)
+        "triage": [],
     }
 
 
@@ -1199,6 +1297,16 @@ def _validate_comprehension(comp: Any) -> list[str]:
 
     # fragments: [ { ref, kind, blocks, purpose? } ] - reusable-fragment proposals.
     problems.extend(_validate_comp_fragments(comp.get("fragments")))
+
+    # audit: { <checklist_id>: { verdict, evidence?, shell_sha256?, content_sha256? } }
+    # - the persisted L2 visual-audit verdict map (Cluster C1). SHAPE-ONLY; that the
+    # KEY is a real checklist id is the fail-closed ``check_audit_targets`` job.
+    problems.extend(_validate_comp_audit(comp.get("audit")))
+
+    # triage: [ { check, location, disposition, evidence? } ] - the model-assisted
+    # QA-triage list (Cluster C2). SHAPE-ONLY; that the (check, location) was actually
+    # emitted is the fail-closed ``check_triage_targets`` / ``check_triage`` job.
+    problems.extend(_validate_comp_triage(comp.get("triage")))
     return problems
 
 
@@ -1384,6 +1492,109 @@ def _validate_comp_fragments(fragments: Any) -> list[str]:
         if purpose is not None and not isinstance(purpose, str):
             problems.append(
                 f"{path}.purpose: must be a string or null, got {purpose!r}"
+            )
+    return problems
+
+
+def _validate_comp_audit(audit: Any) -> list[str]:
+    """Validate ``comprehension.audit`` (the persisted L2 verdict map, Cluster C1).
+
+    SHAPE-ONLY, mirroring :func:`_validate_comp_fragments` and never-required: a
+    profile without the key, or with ``audit == {}``, yields no problems. Each value
+    must be an object carrying a closed ``verdict`` (``PASS|FAIL|NA``, illegal value
+    rejected like ``fill_rule``/``verdict``); ``evidence`` is advisory (a string or
+    null), accepted as-is and NEVER gated; ``shell_sha256`` / ``content_sha256`` are
+    optional hex strings or null (they scope the short-circuit, gated by value at
+    generate, not by this structural validator).
+
+    It deliberately does NOT check that the KEY is a real ``visual_manifest.json``
+    checklist id - that is the fail-closed ``check_audit_targets`` /
+    ``check_membership`` audit-arm job (it needs the profile-derived checklist and
+    must be able to ERROR on an empty checklist, which a never-required structural
+    validator must not do; same split as comprehension refs vs membership).
+    """
+    if audit is None:
+        return []
+    if not isinstance(audit, dict):
+        return [
+            "comprehension.audit: must be an object mapping checklist id -> verdict"
+        ]
+    problems: list[str] = []
+    for key, row in audit.items():
+        path = f"comprehension.audit.{key}"
+        if not isinstance(key, str) or not key:
+            problems.append(f"{path}: audit key must be a non-empty string")
+        if not isinstance(row, dict):
+            problems.append(f"{path}: must be an object")
+            continue
+        verdict = row.get("verdict")
+        if verdict not in AUDIT_VERDICTS:
+            problems.append(
+                f"{path}.verdict: illegal value {verdict!r} (legal: {sorted(AUDIT_VERDICTS)})"
+            )
+        evidence = row.get("evidence")
+        if evidence is not None and not isinstance(evidence, str):
+            problems.append(
+                f"{path}.evidence: must be a string or null, got {evidence!r}"
+            )
+        for sha_field in ("shell_sha256", "content_sha256"):
+            val = row.get(sha_field)
+            if val is not None and not isinstance(val, str):
+                problems.append(
+                    f"{path}.{sha_field}: must be a hex string or null, got {val!r}"
+                )
+    return problems
+
+
+def _validate_comp_triage(triage: Any) -> list[str]:
+    """Validate ``comprehension.triage`` (the model-assisted QA-triage list, C2).
+
+    SHAPE-ONLY, mirroring :func:`_validate_comp_audit` and never-required: a profile
+    without the key, or with ``triage == []``, yields no problems. Each entry must be
+    an object carrying a ``check`` that is one of the closed
+    :data:`AMBIGUOUS_TRIAGE_CHECKS` ids (illegal value rejected like ``fill_rule`` /
+    ``verdict``), a ``disposition`` in the closed :class:`TriageDisposition` enum
+    (``expected`` | ``defect``), an optional ``location`` (a string or null), and an
+    optional advisory ``evidence`` (a string or null, accepted as-is and NEVER gated).
+
+    It deliberately does NOT check that the ``(check, location)`` pair was actually
+    EMITTED by the gate, nor that the pair is unique across the proposal - those are
+    the fail-closed ``check_triage`` / ``check_triage_targets`` job (same split as
+    audit refs vs ``check_audit_targets``). Restricting ``check`` to the WARNING-only
+    eligible set HERE is the belt that makes an ERROR-aimed triage entry rejected at
+    merge before ``_apply_triage`` ever runs - it can never demote an ERROR.
+    """
+    if triage is None:
+        return []
+    if not isinstance(triage, list):
+        return ["comprehension.triage: must be a list"]
+    problems: list[str] = []
+    for i, entry in enumerate(triage):
+        path = f"comprehension.triage[{i}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{path}: must be an object")
+            continue
+        check = entry.get("check")
+        if check not in AMBIGUOUS_TRIAGE_CHECKS:
+            problems.append(
+                f"{path}.check: illegal value {check!r} "
+                f"(legal: {sorted(AMBIGUOUS_TRIAGE_CHECKS)})"
+            )
+        disposition = entry.get("disposition")
+        if disposition not in TRIAGE_DISPOSITIONS:
+            problems.append(
+                f"{path}.disposition: illegal value {disposition!r} "
+                f"(legal: {sorted(TRIAGE_DISPOSITIONS)})"
+            )
+        location = entry.get("location")
+        if location is not None and not isinstance(location, str):
+            problems.append(
+                f"{path}.location: must be a string or null, got {location!r}"
+            )
+        evidence = entry.get("evidence")
+        if evidence is not None and not isinstance(evidence, str):
+            problems.append(
+                f"{path}.evidence: must be a string or null, got {evidence!r}"
             )
     return problems
 

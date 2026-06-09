@@ -39,6 +39,7 @@ def run_qa(
     extra_findings: list | None = None,
     out_dir: str | Path | None = None,
     visual=None,
+    content_hash: str | None = None,
 ) -> QAReport:
     """Run the L0 deterministic gate, then the visual audit when asked/available.
 
@@ -62,6 +63,11 @@ def run_qa(
             tests to drive the visual path without ``soffice``. When None the
             real env-aware renderer is used. Default None keeps every existing
             call identical.
+        content_hash: the sha of the canonical generate input (``to_dict()`` JSON),
+            passed ONLY by ``cli.generate``. It is recorded into the visual manifest
+            (so the L2 model can scope a verdict to the exact artifact) and gates the
+            generate-time L2 short-circuit. ``cli.verify`` passes None, so the
+            short-circuit can NEVER fire at verify - verify behaviour is unchanged.
     """
     # ``check_profile`` runs EXACTLY ONCE: the per-format checks call it internally,
     # so when one of them runs (target present) calling it here too would
@@ -95,6 +101,21 @@ def run_qa(
     # inventories. No-ops when comprehension is absent (model-free CI path,
     # pptx/xlsx), so it is always safe to run unconditionally here.
     findings = findings + checks_deterministic.check_comprehension_targets(profile)
+    # Fail-closed L2 visual-AUDIT-target membership (sibling of comprehension targets,
+    # Cluster C1): every persisted ``comprehension.audit`` key must be a verbatim id
+    # from the profile's derived visual checklist; rejects-never-skips on an empty
+    # checklist. No-ops when comprehension is absent, so the model-free CI path and
+    # pptx/xlsx are unaffected.
+    findings = findings + checks_deterministic.check_audit_targets(profile)
+    # Fail-closed model-assisted QA-TRIAGE-target membership (sibling of audit
+    # targets, Cluster C2): every ``comprehension.triage`` entry must name a check in
+    # the closed eligible set and a unique (check, location) pair; rejects-never-skips
+    # a non-eligible check / duplicate. No-ops when comprehension is absent, so the
+    # model-free CI path and pptx/xlsx are unaffected. (The triage entries are CONSUMED
+    # - demoting a matched WARNING to INFO - inside ``_run_visual_audit`` via the single
+    # ``_apply_triage``, BEFORE the strict promoter and this final fold; this line only
+    # ENFORCES that every triage entry is well-formed.)
+    findings = findings + checks_deterministic.check_triage_targets(profile)
     # Fail-closed LEARNED-override-target membership (sibling of comprehension
     # targets, Cluster B): every reroute target / number_format mask / demo-clear
     # value a learned lesson re-points to must be proven by this shell / captured for
@@ -120,7 +141,18 @@ def run_qa(
         qa=qa,
         out_dir=out_dir,
         visual=visual,
+        shell=shell,
+        content_hash=content_hash,
     )
+
+    # Cluster C2: the SINGLE model-assisted triage demotion over the FULL assembled
+    # list. This covers the format-level ``component_survival`` WARNINGs (built above,
+    # not inside ``_run_visual_audit``) and is idempotent over the visual L1 findings
+    # already triaged inside ``_run_visual_audit`` before the strict promoter (an
+    # already-demoted INFO fails the WARNING guard, so no double-suffix). The fold
+    # below then keys on this already-triaged list. An ERROR can NEVER be demoted -
+    # ``_apply_triage`` guards on ``severity == WARNING``.
+    findings = _apply_triage(findings, profile)
 
     verdict = schema.VerificationStatus.PASSED.value
     if any(f.severity == schema.Severity.ERROR.value for f in findings):
@@ -137,6 +169,8 @@ def _run_visual_audit(
     qa: str,
     out_dir,
     visual,
+    shell=None,
+    content_hash: str | None = None,
 ) -> list[Finding]:
     """Run the optional visual audit and return its findings (never raises).
 
@@ -163,6 +197,19 @@ def _run_visual_audit(
 
     # Lazy import: keeps the fast/CI path free of the visual module entirely.
     from brandkit.qa import visual as vqa
+
+    # L2 SHORT-CIRCUIT (Cluster C1): skip the model-driven L2 render+manifest round
+    # ONLY when a previously persisted audit verdict proves the EXACT same artifact
+    # already passed. It can never mask a regression: it requires coverage of EVERY
+    # current checklist id at verdict==PASS AND an exact (shell_sha, content_sha)
+    # match, it is disabled under strict (which always re-renders for full proof) and
+    # at verify (content_hash is None there). It skips the WHOLE visual round - the
+    # render, the side artifacts, AND the L1 pixel proxies that live inside it (which
+    # are WARNING-only and redundant on a byte-identical render) - but NEVER the
+    # document bytes and NEVER the ERROR-bearing L0 checks above (those already ran).
+    short = _l2_short_circuit(profile, qa=qa, shell=shell, content_hash=content_hash)
+    if short is not None:
+        return [short]
 
     if visual is not None:
         renderers_ok, png_paths = visual
@@ -238,6 +285,8 @@ def _run_visual_audit(
                 environment_status=vqa.last_renderer_status(),
                 ocr_report=ocr_report,
                 qa_mode=qa,
+                shell_sha256=_manifest_shell_sha256(profile, shell),
+                content_sha256=content_hash,
             )
             findings.append(
                 Finding(
@@ -289,8 +338,19 @@ def _run_visual_audit(
         )
         ocr_report = vqa.run_visual_ocr(png_paths, profile)
         findings.extend(vqa.ocr_findings(ocr_report))
+        # Cluster C2: triage demotion MUST precede the strict promotion, or a
+        # model-confirmed-EXPECTED ambiguous WARNING (a full-bleed cover the
+        # edge-bleed proxy flags, a deliberately blank page) would already be
+        # promoted to a ``visual.strict`` ERROR and stay failing under strict. The
+        # single ``_apply_triage`` runs here on the assembled L1/OCR findings; the
+        # downstream strict promoter and ``run_qa``'s final fold then read the
+        # already-triaged list. ``visual.strict`` is an ERROR id NOT in the eligible
+        # set, so once raised it is itself undemotable.
+        findings = _apply_triage(findings, profile)
         if qa == "strict":
-            findings.extend(_strict_visual_errors(findings))
+            findings.extend(
+                _strict_visual_errors(findings, _expected_triage_keys(profile))
+            )
         manifest = vqa.build_visual_manifest(
             profile=profile,
             document=target,
@@ -302,6 +362,8 @@ def _run_visual_audit(
             environment_status=vqa.last_renderer_status(),
             ocr_report=ocr_report,
             qa_mode=qa,
+            shell_sha256=_manifest_shell_sha256(profile, shell),
+            content_sha256=content_hash,
         )
         findings.append(
             Finding(
@@ -312,6 +374,159 @@ def _run_visual_audit(
             )
         )
     return findings
+
+
+def _apply_triage(findings: list[Finding], profile: dict) -> list[Finding]:
+    """Demote model-confirmed-EXPECTED ambiguous WARNINGs to INFO (Cluster C2).
+
+    The SOLE consumer of ``comprehension.triage``. Returns a new list where a finding
+    is demoted to INFO ONLY when ALL hold:
+
+      * ``finding.severity == Severity.WARNING`` (an ERROR or INFO is left verbatim -
+        this single guard is the load-bearing proof that an ERROR can NEVER be
+        demoted: the enum has no value that lowers an ERROR);
+      * ``finding.check`` is in the closed :data:`schema.AMBIGUOUS_TRIAGE_CHECKS`
+        (defense-in-depth: the lookup is already restricted to that set);
+      * ``(finding.check, finding.location)`` has a matching triage entry whose
+        ``disposition == expected``.
+
+    A ``defect`` disposition, an entry for an ERROR-emitting check (rejected at merge,
+    never reaching the lookup), or any miss leaves the finding verbatim. No-op when
+    the comprehension is absent / not present / carries no triage, so an empty triage
+    is byte-identical to today's gate. Idempotent: a finding already demoted to INFO
+    fails the WARNING guard, so a second pass is a no-op (this lets the single
+    implementation be called both inside ``_run_visual_audit`` - before the strict
+    promoter - and again over the full assembled list, with no double-suffix).
+    """
+    comp = profile.get("comprehension")
+    if (
+        not isinstance(comp, dict)
+        or comp.get("status") != schema.ComprehensionStatus.PRESENT.value
+    ):
+        return findings
+    triage = comp.get("triage")
+    if not isinstance(triage, list) or not triage:
+        return findings
+    # Build the (check, location) -> entry lookup, restricted to the eligible set
+    # (defense-in-depth; the merge already rejected a non-member check).
+    lookup: dict[tuple, dict] = {}
+    for entry in triage:
+        if not isinstance(entry, dict):
+            continue
+        check = entry.get("check")
+        if check not in schema.AMBIGUOUS_TRIAGE_CHECKS:
+            continue
+        lookup[(check, entry.get("location"))] = entry
+
+    out: list[Finding] = []
+    for finding in findings:
+        if (
+            finding.severity == schema.Severity.WARNING.value
+            and finding.check in schema.AMBIGUOUS_TRIAGE_CHECKS
+        ):
+            entry = lookup.get((finding.check, finding.location))
+            if (
+                entry is not None
+                and entry.get("disposition") == schema.TriageDisposition.EXPECTED.value
+            ):
+                evidence = entry.get("evidence")
+                suffix = (
+                    f" (triaged EXPECTED: {evidence})"
+                    if evidence
+                    else " (triaged EXPECTED)"
+                )
+                out.append(
+                    Finding(
+                        finding.check,
+                        schema.Severity.INFO.value,
+                        finding.message + suffix,
+                        location=finding.location,
+                    )
+                )
+                continue
+        out.append(finding)
+    return out
+
+
+def _manifest_shell_sha256(profile: dict, shell) -> str | None:
+    """The shell sha stamped into the manifest / matched by the short-circuit.
+
+    Single derivation shared by both manifest writes AND :func:`_l2_short_circuit`
+    (via ``qa.report.report_shell_sha256``), so the per-row ``shell_sha256`` the
+    model wrote against a manifest can be compared bit-for-bit to the sha a later
+    generate derives. Prefers the live shell bytes, else ``provenance.shell.sha256``.
+    """
+    from brandkit.qa import report as vreport
+
+    return vreport.report_shell_sha256(profile, shell)
+
+
+def _l2_short_circuit(
+    profile: dict, *, qa: str, shell, content_hash: str | None
+) -> Finding | None:
+    """Return a single INFO finding when the L2 round may be SKIPPED, else None (C1).
+
+    Fires ONLY when ALL hold (so it can never mask a regression):
+
+      1. ``qa != "strict"`` - strict ALWAYS re-renders for full proof.
+      2. ``content_hash is not None`` - generate-time only; verify passes None.
+      3. the present comprehension ``audit`` map covers EVERY current
+         ``visual_checklist_ids(profile)`` id (coverage of the CURRENTLY derived set,
+         not just the keys present - a newly-derived id with no audit row forces a
+         full L2).
+      4. for every such id: ``verdict == "PASS"`` AND ``shell_sha256`` matches the
+         live shell sha AND ``content_sha256 == content_hash``.
+
+    Any missing id / any FAIL / any NA / any sha mismatch -> return None (fall
+    through to the full render+manifest path). When it fires it skips the WHOLE
+    visual round - the render, the side artifacts (PNGs+manifest), AND the L1 pixel
+    proxies (blank-page/edge-bleed/OCR), which run inside that round. That is sound:
+    L1 reads the rendered pixels, and an identical (shell_sha, content_sha) yields a
+    byte-identical render, so re-running L1 is redundant; ANY content/shell change
+    defeats the sha gate and forces the full round. Only L0 (run BEFORE the visual
+    round) is guaranteed to have already executed.
+    """
+    if qa == "strict" or content_hash is None:
+        return None
+    comp = profile.get("comprehension")
+    if (
+        not isinstance(comp, dict)
+        or comp.get("status") != schema.ComprehensionStatus.PRESENT.value
+    ):
+        return None
+    audit = comp.get("audit")
+    if not isinstance(audit, dict) or not audit:
+        return None
+
+    from brandkit.qa.visual import visual_checklist_ids
+
+    checklist_ids = visual_checklist_ids(profile)
+    if not checklist_ids:
+        # No derived checklist => nothing the verdict could cover => never skip.
+        return None
+
+    shell_sha = _manifest_shell_sha256(profile, shell)
+    for cid in checklist_ids:
+        row = audit.get(cid)
+        if not isinstance(row, dict):
+            return None  # a current checklist id with no verdict -> full L2
+        if row.get("verdict") != schema.AuditVerdict.PASS.value:
+            return None  # any FAIL/NA/missing -> full L2
+        if row.get("shell_sha256") != shell_sha:
+            return None  # stale shell -> full L2
+        if row.get("content_sha256") != content_hash:
+            return None  # different content -> full L2
+
+    return Finding(
+        "visual.l2_short_circuit",
+        schema.Severity.INFO.value,
+        (
+            f"L2 visual audit short-circuited: all {len(checklist_ids)} checklist "
+            "item(s) PASSed for this exact shell+content in a prior audit; "
+            "render+manifest skipped"
+        ),
+        location=None,
+    )
 
 
 def _degraded_render_warnings(warnings: list[str]) -> bool:
@@ -330,12 +545,57 @@ _STRICT_BLOCKING_CHECKS = {
 }
 
 
-def _strict_visual_errors(findings: list[Finding]) -> list[Finding]:
-    """Promote concrete visual-audit findings into strict-mode gate errors."""
+def _expected_triage_keys(profile: dict) -> set[tuple]:
+    """The set of (check, location) pairs a present comprehension triaged EXPECTED.
+
+    Restricted to the closed eligible set (defense-in-depth; merge already rejected a
+    non-member). Empty when comprehension is absent / not present / carries no triage,
+    so it is byte-identical to today's gate. Shared by :func:`_strict_visual_errors`
+    so the strict promoter skips EXACTLY the WARNINGs ``_apply_triage`` demoted - and
+    nothing else (a genuinely-INFO blocking finding like ``visual.ocr_degraded`` is
+    still promoted, since it is not an EXPECTED-triaged key).
+    """
+    comp = profile.get("comprehension")
+    if (
+        not isinstance(comp, dict)
+        or comp.get("status") != schema.ComprehensionStatus.PRESENT.value
+    ):
+        return set()
+    triage = comp.get("triage")
+    if not isinstance(triage, list):
+        return set()
+    keys: set[tuple] = set()
+    for entry in triage:
+        if (
+            isinstance(entry, dict)
+            and entry.get("check") in schema.AMBIGUOUS_TRIAGE_CHECKS
+            and entry.get("disposition") == schema.TriageDisposition.EXPECTED.value
+        ):
+            keys.add((entry.get("check"), entry.get("location")))
+    return keys
+
+
+def _strict_visual_errors(
+    findings: list[Finding], expected_triage: set[tuple] | None = None
+) -> list[Finding]:
+    """Promote concrete visual-audit findings into strict-mode gate errors.
+
+    ``expected_triage`` is the set of ``(check, location)`` pairs a model confirmed
+    EXPECTED (Cluster C2). A blocking finding matching one of those pairs is NOT
+    promoted: triage already demoted that WARNING to INFO, and strict must honour the
+    model's judgement rather than re-promote the same defect. This is the keyed
+    counterpart to the ``_apply_triage`` demotion (same closed lookup), so it skips
+    EXACTLY the demoted findings and never a genuinely-INFO blocking finding (e.g.
+    ``visual.ocr_degraded``, which is INFO-by-design and still blocks strict). With no
+    triage the set is empty and every existing strict promotion is unchanged.
+    """
+    expected_triage = expected_triage or set()
     errors: list[Finding] = []
     for finding in findings:
         if finding.check not in _STRICT_BLOCKING_CHECKS:
             continue
+        if (finding.check, finding.location) in expected_triage:
+            continue  # model-confirmed EXPECTED -> undemotable AND unpromotable
         errors.append(
             Finding(
                 "visual.strict",

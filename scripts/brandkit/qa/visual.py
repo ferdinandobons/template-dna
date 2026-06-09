@@ -86,7 +86,11 @@ EDGE_INK_FRAC_MAX: float = 0.004  # ink allowed in an edge band before flagging
 # Manifest constants
 # ---------------------------------------------------------------------------
 MANIFEST_FILENAME: str = "visual_manifest.json"
-MANIFEST_SCHEMA_VERSION: str = "visual-manifest-1"
+# visual-manifest-2 (additive): adds the top-level ``shell_sha256`` /
+# ``content_sha256`` the L2 model reads to write an audit verdict scoped to the
+# EXACT rendered artifact. Both are null when the caller has no hash (verify time),
+# so the field is always present and the additive bump is byte-safe.
+MANIFEST_SCHEMA_VERSION: str = "visual-manifest-2"
 
 _PAGE_RE = re.compile(r"page-(\d+)\.png$")
 _LAST_RENDERER_STATUS: dict | None = None
@@ -824,6 +828,20 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
         return 0, 0
 
 
+def visual_checklist_ids(profile: dict) -> list[str]:
+    """Return the SOLE set of L2 checklist item ids derived from ``profile``.
+
+    The pure id-only projection of :func:`derive_visual_checklist` (zero PIL /
+    doctor cost). Both the L2 audit MEMBERSHIP gate (``comprehension.check_membership``'s
+    audit arm + ``check_audit_targets``) and the generate-time short-circuit bind
+    to THIS function, while ``derive_visual_checklist`` itself uses it for its item
+    ``id`` fields, so the model's audit bundle, the gate, and the short-circuit can
+    never drift from the checklist the manifest publishes. Order matches
+    ``derive_visual_checklist``.
+    """
+    return [item["id"] for item in derive_visual_checklist(profile)]
+
+
 def derive_visual_checklist(profile: dict) -> list[dict]:
     """Build the L2 checklist from the profile (model-free).
 
@@ -833,6 +851,10 @@ def derive_visual_checklist(profile: dict) -> list[dict]:
     a chart role/component is present, ``cover_correct`` only when ``anchors.cover``
     exists). ``derived_from`` keeps every item traceable so the orchestrator knows
     *why* it is checking. Nothing here calls a model.
+
+    :func:`visual_checklist_ids` is the id-only projection of this function and the
+    SOLE membership source for the L2 audit gate + short-circuit; keep that the
+    single definition of the id set.
     """
     items: list[dict] = []
     structure = profile.get("structure") or {}
@@ -977,6 +999,8 @@ def build_visual_manifest(
     environment_status: dict | None = None,
     ocr_report: dict | None = None,
     qa_mode: str = "deep",
+    shell_sha256: str | None = None,
+    content_sha256: str | None = None,
 ) -> Path:
     """Build and write ``<out_dir>/visual_manifest.json`` (a SIDE artifact).
 
@@ -1018,6 +1042,12 @@ def build_visual_manifest(
         "kind": profile.get("kind"),
         "profile_name": (profile.get("identity") or {}).get("name"),
         "document": document.name,
+        # The exact-artifact identity the L2 model scopes its audit verdict to: a
+        # persisted ``audit`` row only short-circuits a FUTURE generate when BOTH
+        # match the live shell + the new content (null when the caller has no hash,
+        # e.g. verify time, so the short-circuit can never fire then).
+        "shell_sha256": shell_sha256,
+        "content_sha256": content_sha256,
         "renderers_available": bool(renderers_ok),
         "qa_mode": qa_mode,
         "dpi": DEFAULT_DPI,

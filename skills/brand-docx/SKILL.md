@@ -81,6 +81,27 @@ Use its output to decide the run mode:
 5. Convert the user's requested content into `IntermediateDocument` JSON.
 6. **Generate** the `.docx` with the internal engine.
 7. Run **QA** and report any warnings honestly.
+8. **Feedback** (only after returning the file): invite a refinement of the
+   understanding for future documents (see below).
+
+## Feedback (end of generation)
+
+Ask for feedback **only after** you have returned the generated `.docx` and its
+QA summary - never before or during generation. Invite the user to reply with
+**text or a screenshot** of the document, and name the roles, palette colors, and
+sections you actually used so the answer is concrete. A screenshot is your own
+multimodal read; the engine only ever ingests the structured JSON delta you
+distil from it.
+
+Turn the answer into a small refinement delta of verbatim ids and merge it with
+the `refine` verb (see [reference/comprehension.md](reference/comprehension.md)):
+
+```bash
+python scripts/brandkit/cli.py refine --name <brand> --input refinement.json --accept
+```
+
+A refinement improves **FUTURE** generations of this brand only - it mutates the
+saved profile, never the `.docx` you just produced. To apply it, generate again.
 
 ## Internal Extract
 

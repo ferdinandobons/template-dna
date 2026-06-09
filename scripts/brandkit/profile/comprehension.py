@@ -416,7 +416,214 @@ def check_membership(profile: dict, comp: dict) -> list[str]:
                 f"surfaced palette inventory {sorted(palette_ids)}"
             )
 
+    # (f) audit keys ∈ the profile-derived visual checklist (Cluster C1). FAIL-CLOSED
+    # on empty, same rule as anchor/index/region: the L2 model may write a verdict
+    # only against a structural checklist id the engine itself derived, never invent
+    # one. The id set is the SOLE definition in ``qa.visual.visual_checklist_ids`` so
+    # the model bundle, this gate, and the generate-time short-circuit cannot drift.
+    # Lazy import (like ``block_from_dict`` above): ``qa.visual`` imports PIL/doctor
+    # at module top, so a module-level import here would create a profile<-qa cycle
+    # and drag PIL into every merge.
+    audit = comp.get("audit")
+    if isinstance(audit, dict) and audit:
+        from brandkit.qa.visual import visual_checklist_ids
+
+        checklist_ids = set(visual_checklist_ids(profile))
+        for key in audit:
+            if key not in checklist_ids:
+                problems.append(
+                    f"comprehension.audit: checklist id {key!r} not in the profile's "
+                    f"derived visual checklist {sorted(checklist_ids)}"
+                )
+
     return problems
+
+
+def check_triage(profile: dict, comp: dict) -> list[str]:
+    """Fail-closed validation of ``comprehension.triage`` (Cluster C2).
+
+    Shape is checked by ``schema._validate_comp_triage`` (each entry's ``check`` in
+    the closed :data:`schema.AMBIGUOUS_TRIAGE_CHECKS`, ``disposition`` in the closed
+    :class:`schema.TriageDisposition`). This enforces what shape cannot, reject-never-skip:
+
+      - each ``check`` is in the closed eligible set (re-checked here so the gate's
+        ``check_triage_targets`` and merge agree on a single membership definition;
+        the eligible set is WARNING-only, so a triage entry aimed at an ERROR-emitting
+        check is rejected HERE - it can never demote an ERROR);
+      - ``(check, location)`` is UNIQUE across the proposal (two dispositions for one
+        finding is ambiguous), mirroring ``check_fragments``' ``(kind, ref)`` uniqueness.
+
+    The model writes only a closed disposition + advisory evidence against a closed
+    ``(check, location)`` pair; it never writes a brand value, so a validated triage
+    entry cannot widen the brand guarantee. ``_apply_triage`` (the SOLE consumer)
+    demotes ONLY a matching WARNING to INFO, so triage can never mask an ERROR.
+
+    Returns ``[]`` when ``comp`` is absent / status != present (same status gate as
+    :func:`check_membership`): an absent block carries no triage to enforce, and a
+    rejected block is rebuilt (its findings already recorded). (``profile`` is unused
+    but kept for signature symmetry with :func:`check_membership`.)
+    """
+    del profile  # triage binds to the closed check set, not to surfaced inventories
+    if not isinstance(comp, dict):
+        return []
+    status = comp.get("status")
+    if status not in (None, schema.ComprehensionStatus.PRESENT.value):
+        return []
+    triage = comp.get("triage")
+    if not isinstance(triage, list) or not triage:
+        return []
+
+    problems: list[str] = []
+    seen: set[tuple] = set()
+    for i, entry in enumerate(triage):
+        if not isinstance(entry, dict):
+            continue  # shape validator already flags
+        path = f"comprehension.triage[{i}]"
+        check = entry.get("check")
+        if check not in schema.AMBIGUOUS_TRIAGE_CHECKS:
+            problems.append(
+                f"{path}.check: {check!r} is not an eligible triage check "
+                f"{sorted(schema.AMBIGUOUS_TRIAGE_CHECKS)}"
+            )
+            continue  # an out-of-set check cannot have a well-formed (check, location)
+        location = entry.get("location")
+        key = (check, location)
+        if key in seen:
+            problems.append(
+                f"{path}: duplicate triage entry for (check={check!r}, "
+                f"location={location!r})"
+            )
+        seen.add(key)
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Refinement overlay (Cluster C3) - the qualitative-answer -> comprehension delta
+# ---------------------------------------------------------------------------
+# The closed set of comprehension sinks a refinement may touch. A delta key that
+# is not one of these is IGNORED (the model can never smuggle a new field or shadow
+# a structural one). ``audit`` / ``triage`` are deliberately ABSENT: refine is over
+# the qualitative-understanding sinks only, never the QA-verdict sinks.
+REFINABLE_SINKS: frozenset[str] = frozenset(
+    {
+        "role_annotations",
+        "palette_annotations",
+        "demo_classification",
+        "cover_slots",
+        "conventions",
+    }
+)
+
+
+def overlay_refinement(existing: dict, delta: dict) -> dict:
+    """Overlay a model-authored refinement ``delta`` onto an EXISTING comprehension.
+
+    ``merge`` is REPLACE-from-single-source: ``_canonicalize`` rebuilds a fresh
+    ``empty_comprehension()`` and copies only what the proposal carries, so passing a
+    raw delta straight to ``merge`` would WIPE every existing sink. This primitive
+    closes that trap: it returns a NEW dict that is the existing present block with
+    the delta's sinks overlaid, ready to route whole through ``merge`` (which re-runs
+    the full fail-closed validation + membership binding on the combined block).
+
+    Closed-key, per-sink semantics (pure; ``existing`` / ``delta`` are not mutated):
+
+      - ``role_annotations`` / ``palette_annotations`` / ``cover_slots``: shallow MAP
+        update (a delta key replaces the matching existing entry, a new key is added).
+      - ``demo_classification.regions``: MERGE-BY ``region_ref`` (a delta region
+        replaces the matching existing one, a new ``region_ref`` is appended) - never
+        a naive concat, which would dup-key a region.
+      - ``conventions.indexes`` / ``conventions.sections``: MERGE-BY ``index_ref`` /
+        ``region_ref`` respectively (same replace-or-append-by-ref rule).
+
+    Any delta key NOT in :data:`REFINABLE_SINKS` is ignored, so the model cannot
+    introduce a new field or overwrite a structural one (e.g. ``roles[*].resolver``,
+    ``source_shell_sha256``, ``audit``, ``triage``). The result still carries the
+    existing block's other sinks verbatim (deep-copied), so the subsequent ``merge``
+    preserves them rather than dropping them.
+    """
+    import copy
+
+    out = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+    if not isinstance(delta, dict):
+        return out
+
+    # (a) plain map sinks: shallow update keyed by id.
+    for sink in ("role_annotations", "palette_annotations", "cover_slots"):
+        d = delta.get(sink)
+        if not isinstance(d, dict):
+            continue
+        base = out.get(sink)
+        merged = dict(base) if isinstance(base, dict) else {}
+        for key, val in d.items():
+            if isinstance(key, str) and key:
+                merged[key] = copy.deepcopy(val)
+        out[sink] = merged
+
+    # (b) demo_classification.regions: merge-by region_ref.
+    demo = delta.get("demo_classification")
+    if isinstance(demo, dict) and isinstance(demo.get("regions"), list):
+        base_dc = out.get("demo_classification")
+        regions = (
+            list((base_dc or {}).get("regions") or [])
+            if isinstance(base_dc, dict)
+            else []
+        )
+        out["demo_classification"] = {
+            "regions": _merge_by_ref(regions, demo["regions"], "region_ref")
+        }
+
+    # (c) conventions.indexes / conventions.sections: merge-by ref.
+    conv = delta.get("conventions")
+    if isinstance(conv, dict):
+        base_conv = out.get("conventions")
+        base_conv = base_conv if isinstance(base_conv, dict) else {}
+        merged_conv = {
+            "indexes": list(base_conv.get("indexes") or []),
+            "sections": list(base_conv.get("sections") or []),
+        }
+        if isinstance(conv.get("indexes"), list):
+            merged_conv["indexes"] = _merge_by_ref(
+                merged_conv["indexes"], conv["indexes"], "index_ref"
+            )
+        if isinstance(conv.get("sections"), list):
+            merged_conv["sections"] = _merge_by_ref(
+                merged_conv["sections"], conv["sections"], "region_ref"
+            )
+        out["conventions"] = merged_conv
+
+    return out
+
+
+def _merge_by_ref(base: list, delta: list, ref_key: str) -> list:
+    """Merge ``delta`` entries into ``base`` keyed by ``ref_key`` (replace or append).
+
+    A delta entry whose ``ref_key`` matches an existing entry REPLACES it in place
+    (preserving order); a delta entry with a new ``ref_key`` is APPENDED. This is the
+    list-sink rule the overlay needs so a refinement of one region/index does not
+    drop the others and a re-stated region does not duplicate (naive concat would).
+    Entries without a usable ``ref_key`` are appended verbatim (the downstream merge
+    re-validates shape + membership and will reject a malformed/dangling ref).
+    """
+    import copy
+
+    out = [copy.deepcopy(e) for e in base]
+    index: dict = {}
+    for i, e in enumerate(out):
+        if isinstance(e, dict):
+            ref = e.get(ref_key)
+            if isinstance(ref, str) and ref:
+                index[ref] = i
+    for e in delta:
+        if not isinstance(e, dict):
+            continue
+        ref = e.get(ref_key)
+        if isinstance(ref, str) and ref and ref in index:
+            out[index[ref]] = copy.deepcopy(e)
+        else:
+            if isinstance(ref, str) and ref:
+                index[ref] = len(out)
+            out.append(copy.deepcopy(e))
+    return out
 
 
 def check_fragments(profile: dict, comp: dict) -> list[str]:
@@ -681,6 +888,14 @@ def merge(
     # and writes nothing into the registries.
     problems.extend(check_fragments(profile, trial_comp))
 
+    # 2c) Fail-closed validation of any model-assisted QA-triage entries (Cluster
+    # C2): each names an ELIGIBLE WARNING-only check and a UNIQUE (check, location)
+    # pair. Part of the SAME all-or-nothing transaction (easy to forget; without this
+    # line triage would be canonicalized unguarded). A triage entry can never demote
+    # an ERROR - the eligible set is WARNING-only, so an ERROR-aimed entry is rejected
+    # here, and ``qa.gate._apply_triage`` independently guards on severity==WARNING.
+    problems.extend(check_triage(profile, trial_comp))
+
     if problems:
         # Refuse to write the understanding; record the rejection + findings.
         rejected = schema.empty_comprehension()
@@ -766,6 +981,27 @@ def _canonicalize(
         for k in sorted(palette_ann)
         if isinstance(palette_ann.get(k), dict)
     }
+
+    # audit: sorted by checklist id (Cluster C1). REQUIRED arm - ``empty_comprehension``
+    # rebuilds with ``audit={}``, so omitting this copy would silently discard the
+    # persisted L2 verdict on every merge. The model wrote only closed dispositions
+    # + advisory evidence + per-row shas against ids it did not author.
+    audit = comp.get("audit") or {}
+    out["audit"] = {
+        k: dict(audit[k]) for k in sorted(audit) if isinstance(audit.get(k), dict)
+    }
+
+    # triage: sorted by (check, location-or-"") for a stable, idempotent serialization
+    # (Cluster C2). REQUIRED arm - ``empty_comprehension`` rebuilds with ``triage=[]``,
+    # so omitting this copy would silently discard the model's triage on every merge.
+    # No derived sink: triage is consumed LIVE by ``run_qa._apply_triage``, never
+    # mirrored onto roles/theme. The model wrote only a closed disposition + advisory
+    # evidence against a closed (check, location) pair.
+    triage = [t for t in (comp.get("triage") or []) if isinstance(t, dict)]
+    out["triage"] = sorted(
+        (dict(t) for t in triage),
+        key=lambda d: (str(d.get("check")), str(d.get("location") or "")),
+    )
 
     # demo_classification.regions: sorted by region_ref.
     regions = [

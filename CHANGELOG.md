@@ -49,6 +49,30 @@ All notable changes to BrandDocs are documented in this file.
     byte-identical to today. QA producers now carry the structured `location`
     pointer (role id / demo marker) so lessons distill from real run history.
     The model-proposed phase (B4) is a later increment.
+- **Model-in-the-loop (the model's judgements persist and re-validate fail-closed).**
+  Three additive touchpoints, all routed through the comprehension block (the single
+  model-writable, fail-closed, shell-frozen home); model PROPOSES, deterministic
+  DISPOSES; byte-identical when absent:
+  - **Persisted L2 visual-audit verdict**: the orchestrator's per-checklist
+    PASS/FAIL/NA judgement (written looking at the rendered PNGs) is cached as a
+    `comprehension.audit` sub-block keyed by the structural checklist id
+    (`check_audit_targets`, fail-closed). `generate` then SHORT-CIRCUITS the L2
+    render round only when every CURRENT checklist id is PASS at an exact
+    `(shell_sha, content_sha)` match - any change defeats the gate, so it can never
+    mask a regression; disabled under `--qa strict` and at verify.
+  - **Model-assisted QA triage**: the model adjudicates AMBIGUOUS WARNINGs
+    (blank-page / edge-bleed / component-survival) as expected (demote to INFO) or
+    defect (keep), via a `comprehension.triage` map bound to the closed
+    `AMBIGUOUS_TRIAGE_CHECKS` set (`check_triage_targets`). The eligible set is
+    WARNING-only and the consume path guards on `severity == WARNING`, so a triage
+    entry can NEVER demote an ERROR.
+  - **Interactive `refine` verb**: turns a user's qualitative end-of-generation
+    feedback into a comprehension delta over the EXISTING annotation sinks
+    (`palette_annotations` / `role_annotations` / `demo_classification`), routed
+    through the same fail-closed `merge` (every binding a verbatim surfaced id),
+    shown as a confirm-as-diff and advisory until `--accept`. The skills now ask for
+    feedback ONLY at the end of generation, invite it as text OR a screenshot, and
+    apply it to FUTURE generations (never the just-produced file).
 
 ## [0.7.0] - 2026-06-09
 

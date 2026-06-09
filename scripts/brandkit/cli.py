@@ -116,6 +116,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
 
+    # refine: overlay a model-authored qualitative-feedback delta onto the EXISTING
+    # present comprehension, then route the WHOLE block back through merge (the single
+    # fail-closed writer). ADVISORY by default (mirrors learn --accept): without
+    # --accept the post-overlay diff is printed and the prior block stays authoritative
+    # on disk; --accept persists the refined block. No schema change (1.2.0).
+    p = sub.add_parser("refine")
+    p.add_argument("--name", required=True)
+    p.add_argument(
+        "--input", required=True, help="path to the model-authored refinement.json"
+    )
+    p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
+    p.add_argument(
+        "--accept",
+        action="store_true",
+        help="persist the refined comprehension (else print the diff and keep the prior block)",
+    )
+
     # learn: deterministically distil recurring QA findings (the cross-run
     # generation_report.json history, B1/B2) into a brand-safe overrides lesson and
     # cache it via the single merge_overrides sink. ADVISORY by default: the lesson is
@@ -265,6 +282,11 @@ def main(argv: list[str] | None = None) -> int:
             shell=loaded.shell_path,
             extra_findings=gen_findings,
             out_dir=visual_dir,
+            # Generate-time only: records the artifact's content sha into the visual
+            # manifest (so the L2 model can scope a verdict to it) and gates the L2
+            # short-circuit. ``cli.verify`` passes no content_hash => stays None =>
+            # the short-circuit never fires there (verify behaviour unchanged).
+            content_hash=content_hash,
         )
         # B2: fold cross-run regression findings into THIS run's report so they
         # self-record into the persisted generation_report.json (making recurrence
@@ -337,6 +359,63 @@ def main(argv: list[str] | None = None) -> int:
             f"comprehended {args.name}: {n_slots} cover slot(s), "
             f"{n_idx} index convention(s), {n_frag} fragment(s) [present]"
         )
+        return 0
+    if args.cmd == "refine":
+        import copy
+
+        loaded = store.load_profile(args.name, args.scope)
+        try:
+            delta = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR refine: cannot read {args.input}: {exc}")
+            return 1
+        # The provenance stamp travels with the delta verbatim (same as comprehend);
+        # it is never one of the refinable sinks the overlay reads.
+        generated_by = (
+            delta.pop("generated_by", None) if isinstance(delta, dict) else None
+        )
+        # OVERLAY TRAP: merge is REPLACE-from-single-source, so a raw delta would WIPE
+        # every existing sink. Overlay the delta onto the EXISTING present block first,
+        # then route the WHOLE combined block through merge so the full fail-closed
+        # validation (schema.validate + check_membership + check_fragments + check_triage)
+        # re-runs and every ref re-binds to the live surface_inventories.
+        existing = copy.deepcopy(loaded.profile.get("comprehension") or {})
+        combined = comprehension_mod.overlay_refinement(existing, delta)
+        # ADVISORY-until-accept (mirrors learn --accept): without --accept, merge into a
+        # COPY of the profile so the diff can be computed without persisting a live block;
+        # the prior block on disk stays authoritative. With --accept, merge into the real
+        # profile and persist. A bad refinement is all-or-nothing: merge writes
+        # status='rejected' and (advisory) the prior present block is left untouched.
+        target = loaded.profile if args.accept else copy.deepcopy(loaded.profile)
+        result = comprehension_mod.merge(target, combined, generated_by=generated_by)
+        if not result.ok:
+            print(f"refinement REJECTED ({len(result.problems)} problem(s)):")
+            for problem in result.problems:
+                print(f"  {problem}")
+            return 1
+        if args.accept:
+            store.write_profile_json(loaded.directory, loaded.profile)
+        # Confirm-as-diff: existing canonical vs post-overlay canonical, per sink. Both
+        # are canonical (sorted/stable) so the diff is deterministic.
+        before = json.dumps(existing, indent=2, sort_keys=True, ensure_ascii=False)
+        after = json.dumps(
+            target["comprehension"], indent=2, sort_keys=True, ensure_ascii=False
+        )
+        import difflib
+
+        diff = "\n".join(
+            difflib.unified_diff(
+                before.splitlines(),
+                after.splitlines(),
+                fromfile="comprehension (current)",
+                tofile="comprehension (refined)",
+                lineterm="",
+            )
+        )
+        if diff:
+            print(diff)
+        state = "persisted (LIVE)" if args.accept else "preview (--accept to persist)"
+        print(f"refined {args.name}: comprehension overlay [{state}]")
         return 0
     if args.cmd == "learn":
         from brandkit.profile import overrides as overrides_mod

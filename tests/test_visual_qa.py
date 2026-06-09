@@ -479,10 +479,16 @@ class ManifestTest(unittest.TestCase):
                     "ocr_binary_errors": {},
                     "ocr_qa": True,
                 },
+                shell_sha256="deadbeef",
+                content_sha256="cafef00d",
             )
             self.assertTrue(manifest_path.is_file())
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(data["schema_version"], "visual-manifest-1")
+            self.assertEqual(data["schema_version"], "visual-manifest-2")
+            # C1: the manifest carries the exact-artifact shas the L2 model scopes a
+            # verdict to (the short-circuit later requires both to match).
+            self.assertEqual(data["shell_sha256"], "deadbeef")
+            self.assertEqual(data["content_sha256"], "cafef00d")
             self.assertEqual(data["kind"], "docx")
             self.assertEqual(len(data["pages"]), 2)
             self.assertIn("checklist", data)
@@ -1590,6 +1596,376 @@ class OcrRobustnessTest(unittest.TestCase):
             text, err = vqa._ocr_png("tesseract", Path("/x/page-1.png"), timeout_s=5)
         self.assertEqual(text, "")
         self.assertIn("failed", err)
+
+
+class L2ShortCircuitTest(unittest.TestCase):
+    """C1: the generate-time L2 short-circuit can NEVER mask a regression."""
+
+    SHELL_SHA = "abc123shell"
+    CONTENT_SHA = "def456content"
+
+    def setUp(self) -> None:
+        vqa._LAST_RENDERER_STATUS = None
+        self.addCleanup(setattr, vqa, "_LAST_RENDERER_STATUS", None)
+
+    def _present_profile(
+        self, *, verdicts=None, content_sha=None, shell_sha=None
+    ) -> dict:
+        """A docx profile with a PRESENT comprehension carrying an audit map that
+        covers every current checklist id (default all PASS at the matching shas)."""
+        prof = _minimal_profile()
+        prof["provenance"]["shell"]["sha256"] = self.SHELL_SHA
+        ids = vqa.visual_checklist_ids(prof)
+        self.assertTrue(ids)
+        audit = {}
+        for cid in ids:
+            audit[cid] = {
+                "verdict": (verdicts or {}).get(cid, "PASS"),
+                "shell_sha256": shell_sha if shell_sha is not None else self.SHELL_SHA,
+                "content_sha256": content_sha
+                if content_sha is not None
+                else self.CONTENT_SHA,
+            }
+        prof["comprehension"] = {
+            "schema_version": "comprehension-1",
+            "status": "present",
+            "source_shell_sha256": self.SHELL_SHA,
+            "confidence": 1.0,
+            "cover_slots": {},
+            "conventions": {"indexes": [], "sections": []},
+            "role_annotations": {},
+            "demo_classification": {"regions": []},
+            "palette_annotations": {},
+            "audit": audit,
+        }
+        return prof
+
+    def _run(self, prof, *, qa="deep", content_hash=CONTENT_SHA):
+        boom = {"n": 0}
+
+        def no_render(*a, **k):  # render must NOT run when short-circuiting
+            boom["n"] += 1
+            return []
+
+        with patch.object(vqa, "render_to_pngs", no_render):
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                target = td / "out.docx"
+                _real_docx(target)
+                report = gate.run_qa(
+                    target,
+                    prof,
+                    qa=qa,
+                    shell=None,  # falls back to provenance.shell.sha256
+                    out_dir=td / "out.visual",
+                    visual=(True, [td / "out.visual" / "page-1.png"]),
+                    content_hash=content_hash,
+                )
+        return report, boom["n"]
+
+    def _checks(self, report) -> set:
+        return {f.check for f in report.findings}
+
+    def test_short_circuit_only_on_all_pass_same_sha(self) -> None:
+        prof = self._present_profile()
+        report, renders = self._run(prof)
+        self.assertIn("visual.l2_short_circuit", self._checks(report))
+        self.assertNotIn("visual.manifest", self._checks(report))
+        self.assertEqual(renders, 0, "render must be skipped when short-circuiting")
+        self.assertTrue(report.passed)
+        sc = [f for f in report.findings if f.check == "visual.l2_short_circuit"]
+        self.assertEqual(sc[0].severity, schema.Severity.INFO.value)
+
+    def test_single_FAIL_or_NA_reruns_l2(self) -> None:
+        ids = vqa.visual_checklist_ids(self._present_profile())
+        for bad in ("FAIL", "NA"):
+            prof = self._present_profile(verdicts={ids[0]: bad})
+            report, renders = self._run(prof)
+            self.assertNotIn(
+                "visual.l2_short_circuit",
+                self._checks(report),
+                f"{bad} short-circuited",
+            )
+            self.assertIn("visual.manifest", self._checks(report))
+
+    def test_content_sha_mismatch_reruns_l2(self) -> None:
+        prof = self._present_profile(content_sha="STALE")
+        report, _ = self._run(prof, content_hash=self.CONTENT_SHA)
+        self.assertNotIn("visual.l2_short_circuit", self._checks(report))
+        self.assertIn("visual.manifest", self._checks(report))
+
+    def test_shell_sha_mismatch_reruns_l2(self) -> None:
+        prof = self._present_profile(shell_sha="OLDSHELL")
+        report, _ = self._run(prof)
+        self.assertNotIn("visual.l2_short_circuit", self._checks(report))
+        self.assertIn("visual.manifest", self._checks(report))
+
+    def test_added_checklist_id_defeats_stale_audit(self) -> None:
+        # A present audit covering only SOME current ids must NOT short-circuit:
+        # a newly-derived id with no audit row forces a full L2.
+        prof = self._present_profile()
+        # Drop one row so coverage of the current derived set is incomplete.
+        some_id = next(iter(prof["comprehension"]["audit"]))
+        del prof["comprehension"]["audit"][some_id]
+        report, _ = self._run(prof)
+        self.assertNotIn("visual.l2_short_circuit", self._checks(report))
+        self.assertIn("visual.manifest", self._checks(report))
+
+    def test_short_circuit_disabled_under_strict(self) -> None:
+        prof = self._present_profile()
+        report, renders = self._run(prof, qa="strict")
+        self.assertNotIn("visual.l2_short_circuit", self._checks(report))
+        self.assertIn("visual.manifest", self._checks(report))
+
+    def test_verify_never_short_circuits(self) -> None:
+        # verify passes no content_hash => stays None => never fires.
+        prof = self._present_profile()
+        report, renders = self._run(prof, content_hash=None)
+        self.assertNotIn("visual.l2_short_circuit", self._checks(report))
+        self.assertIn("visual.manifest", self._checks(report))
+
+    def test_absent_audit_runs_full_l2(self) -> None:
+        # An empty audit map (the byte-identical default) never short-circuits.
+        prof = self._present_profile()
+        prof["comprehension"]["audit"] = {}
+        report, _ = self._run(prof)
+        self.assertNotIn("visual.l2_short_circuit", self._checks(report))
+        self.assertIn("visual.manifest", self._checks(report))
+
+
+class TriageGateTest(unittest.TestCase):
+    """C2: model-assisted QA triage demotes an AMBIGUOUS WARNING to INFO, and can
+    NEVER demote an ERROR (the load-bearing safety property)."""
+
+    def setUp(self) -> None:
+        vqa._LAST_RENDERER_STATUS = None
+        self.addCleanup(setattr, vqa, "_LAST_RENDERER_STATUS", None)
+
+    def _profile_with_triage(self, triage: list) -> dict:
+        prof = _minimal_profile()
+        prof["comprehension"] = {
+            "schema_version": "comprehension-1",
+            "status": "present",
+            "source_shell_sha256": "abc",
+            "confidence": 1.0,
+            "cover_slots": {},
+            "conventions": {"indexes": [], "sections": []},
+            "role_annotations": {},
+            "demo_classification": {"regions": []},
+            "audit": {},
+            "triage": triage,
+        }
+        return prof
+
+    def _run(self, prof, extra_findings, *, qa="auto"):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            target = td / "out.docx"
+            _real_docx(target)
+            return gate.run_qa(
+                target,
+                prof,
+                qa=qa,
+                shell=None,
+                out_dir=td / "out.visual",
+                visual=(True, []),  # no PNGs -> only the injected findings drive L1
+                extra_findings=extra_findings,
+            )
+
+    def _find(self, report, check):
+        return [f for f in report.findings if f.check == check]
+
+    def test_expected_demotes_warning_to_info(self) -> None:
+        prof = self._profile_with_triage(
+            [
+                {
+                    "check": "component_survival",
+                    "location": "tables",
+                    "disposition": "expected",
+                    "evidence": "fewer tables by design",
+                }
+            ]
+        )
+        warn = Finding(
+            "component_survival",
+            schema.Severity.WARNING.value,
+            "native tables count dropped 2 -> 1",
+            location="tables",
+        )
+        report = self._run(prof, [warn])
+        cs = self._find(report, "component_survival")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(cs[0].severity, schema.Severity.INFO.value)
+        self.assertIn("triaged EXPECTED: fewer tables by design", cs[0].message)
+        self.assertTrue(report.passed)
+
+    def test_defect_keeps_warning(self) -> None:
+        prof = self._profile_with_triage(
+            [
+                {
+                    "check": "component_survival",
+                    "location": "tables",
+                    "disposition": "defect",
+                }
+            ]
+        )
+        warn = Finding(
+            "component_survival",
+            schema.Severity.WARNING.value,
+            "native tables count dropped 2 -> 1",
+            location="tables",
+        )
+        report = self._run(prof, [warn])
+        cs = self._find(report, "component_survival")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(cs[0].severity, schema.Severity.WARNING.value)
+        self.assertNotIn("triaged", cs[0].message)
+
+    def test_triage_only_matches_its_own_location(self) -> None:
+        # An EXPECTED entry for one family must NOT demote a WARNING on another.
+        prof = self._profile_with_triage(
+            [
+                {
+                    "check": "component_survival",
+                    "location": "tables",
+                    "disposition": "expected",
+                }
+            ]
+        )
+        other = Finding(
+            "component_survival",
+            schema.Severity.WARNING.value,
+            "native charts count dropped 1 -> 0",
+            location="charts",
+        )
+        report = self._run(prof, [other])
+        cs = self._find(report, "component_survival")
+        self.assertEqual(cs[0].severity, schema.Severity.WARNING.value)
+
+    def test_triage_never_demotes_error(self) -> None:
+        # An ERROR sharing a (check, location) with an EXPECTED triage entry stays an
+        # ERROR and FAILS the gate. This is the load-bearing proof: _apply_triage
+        # guards on severity == WARNING, so no triage value can lower an ERROR.
+        prof = self._profile_with_triage(
+            [
+                {
+                    "check": "component_survival",
+                    "location": "tables",
+                    "disposition": "expected",
+                    "evidence": "should-not-matter",
+                }
+            ]
+        )
+        err = Finding(
+            "component_survival",
+            schema.Severity.ERROR.value,  # deliberately an ERROR
+            "native tables erased entirely",
+            location="tables",
+        )
+        report = self._run(prof, [err])
+        cs = self._find(report, "component_survival")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(cs[0].severity, schema.Severity.ERROR.value)
+        self.assertNotIn("triaged", cs[0].message)
+        self.assertFalse(report.passed)
+
+    def test_empty_triage_is_byte_identical_noop(self) -> None:
+        # With no triage entries, the WARNING is left exactly as emitted.
+        prof = self._profile_with_triage([])
+        warn = Finding(
+            "component_survival",
+            schema.Severity.WARNING.value,
+            "native tables count dropped 2 -> 1",
+            location="tables",
+        )
+        report = self._run(prof, [warn])
+        cs = self._find(report, "component_survival")
+        self.assertEqual(cs[0].severity, schema.Severity.WARNING.value)
+        self.assertNotIn("triaged", cs[0].message)
+
+    def test_component_survival_location_addressable(self) -> None:
+        # The check now stamps the dropped FAMILY as location, so two dropped
+        # families no longer collide on (check, None) and triage can name one.
+        from openpyxl import Workbook
+        from openpyxl.worksheet.table import Table
+
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            shell = t / "shell.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws["A1"] = "h"
+            ws["A2"] = "v"
+            ws.add_table(Table(displayName="T1", ref="A1:A2"))
+            wb.save(shell)
+            out = t / "out.xlsx"
+            wb2 = Workbook()
+            wb2.active["A1"] = "h"
+            wb2.save(out)
+            findings = checks_deterministic.check_component_survival(
+                shell, out, {"kind": "xlsx", "roles": {"_index": []}}
+            )
+            self.assertTrue(findings)
+            self.assertTrue(
+                all(f.location is not None for f in findings),
+                "component_survival must carry an addressable location",
+            )
+            self.assertTrue(any(f.location == "tables" for f in findings))
+
+    def test_strict_promotion_reads_triaged_list(self) -> None:
+        # An EXPECTED full-bleed cover (visual.edge_bleed) must NOT hard-fail strict:
+        # triage demotes the WARNING to INFO BEFORE the strict promoter runs, so it is
+        # never promoted to a visual.strict ERROR. The single bottom-band bar below is
+        # inset from the left/right edges so it produces ONLY the page:1:bottom finding.
+        from PIL import ImageDraw
+
+        prof = self._profile_with_triage(
+            [
+                {
+                    "check": "visual.edge_bleed",
+                    "location": "page:1:bottom",
+                    "disposition": "expected",
+                    "evidence": "cover is intentionally full-bleed",
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            target = td / "out.docx"
+            _real_docx(target)
+            png = td / "page-1.png"
+            w, h = 850, 1100
+            img = _blank(w, h)
+            draw = ImageDraw.Draw(img)
+            # Bottom-band bar inset from left/right -> ONLY page:1:bottom bleeds.
+            draw.rectangle([w // 4, h - max(1, h // 100), 3 * w // 4, h], fill=0)
+            img.save(png)
+            l1 = vqa.run_visual_l1([png])
+            self.assertEqual(
+                sorted(f.location for f in l1 if f.check == "visual.edge_bleed"),
+                ["page:1:bottom"],
+                "fixture must bleed ONLY the bottom band",
+            )
+            report = gate.run_qa(
+                target,
+                prof,
+                qa="strict",
+                shell=None,
+                out_dir=td / "out.visual",
+                visual=(True, [png]),
+            )
+        # The edge_bleed WARNING was demoted to INFO and NEVER promoted to strict.
+        eb = self._find(report, "visual.edge_bleed")
+        self.assertTrue(eb)
+        self.assertTrue(all(f.severity == schema.Severity.INFO.value for f in eb))
+        strict_on_edge = [
+            f
+            for f in report.findings
+            if f.check == "visual.strict" and "edge_bleed" in f.message
+        ]
+        self.assertEqual(
+            strict_on_edge, [], "EXPECTED edge_bleed must not be promoted to strict"
+        )
 
 
 if __name__ == "__main__":

@@ -251,6 +251,277 @@ class IdempotencyTest(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+class AuditSinkTest(unittest.TestCase):
+    """C1: the persisted L2 visual-audit verdict (`comprehension.audit`)."""
+
+    def _checklist_id(self, prof: dict) -> str:
+        from brandkit.qa.visual import visual_checklist_ids
+
+        ids = visual_checklist_ids(prof)
+        self.assertTrue(ids, "test profile must derive a non-empty checklist")
+        return ids[0]
+
+    def test_audit_verdict_against_nonmember_id_rejected(self):
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()
+        comp["audit"] = {"definitely-not-a-checklist-id": {"verdict": "PASS"}}
+        res = comp_mod.merge(prof, comp)
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["comprehension"]["status"], "rejected")
+        self.assertTrue(
+            any("definitely-not-a-checklist-id" in p for p in res.problems),
+            res.problems,
+        )
+
+    def test_valid_audit_verdict_merges(self):
+        prof = _docx_profile_with_inventory()
+        cid = self._checklist_id(prof)
+        comp = _valid_comp()
+        comp["audit"] = {
+            cid: {"verdict": "PASS", "evidence": "looks right", "content_sha256": "x"}
+        }
+        res = comp_mod.merge(prof, comp)
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(prof["comprehension"]["audit"][cid]["verdict"], "PASS")
+
+    def test_bad_audit_verdict_value_rejected(self):
+        prof = _docx_profile_with_inventory()
+        cid = self._checklist_id(prof)
+        comp = _valid_comp()
+        comp["audit"] = {cid: {"verdict": "MAYBE"}}
+        res = comp_mod.merge(prof, comp)
+        self.assertFalse(res.ok)
+        self.assertTrue(any("verdict" in p for p in res.problems), res.problems)
+
+    def test_audit_into_empty_checklist_is_error(self):
+        # An audit key when the derived checklist is EMPTY has nothing to bind to ->
+        # ERROR (reject-never-skip), identical to anchor/index/region refs.
+        from unittest.mock import patch
+
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()
+        comp["audit"] = {"any-id": {"verdict": "PASS"}}
+        with patch("brandkit.qa.visual.visual_checklist_ids", lambda p: []):
+            res = comp_mod.merge(prof, comp)
+        self.assertFalse(res.ok)
+        self.assertTrue(any("any-id" in p for p in res.problems), res.problems)
+
+    def test_audit_survives_merge_round_trip_byte_identical(self):
+        # Guards the _canonicalize audit arm: a key omitted there is silently
+        # dropped, and a re-merge must be byte-identical (idempotency).
+        prof_a = _docx_profile_with_inventory()
+        prof_b = _docx_profile_with_inventory()
+        cid_a = self._checklist_id(prof_a)
+        comp = _valid_comp()
+        comp["audit"] = {cid_a: {"verdict": "PASS", "evidence": "ok"}}
+        res_a = comp_mod.merge(prof_a, comp)
+        self.assertTrue(res_a.ok, res_a.problems)
+        # The verdict survived canonicalization.
+        self.assertIn(cid_a, prof_a["comprehension"]["audit"])
+        # Two merges of the same proposal are byte-identical, and a re-merge stable.
+        comp_mod.merge(
+            prof_b, dict(comp, audit={cid_a: {"verdict": "PASS", "evidence": "ok"}})
+        )
+        self.assertEqual(
+            json.dumps(prof_a["comprehension"], sort_keys=True),
+            json.dumps(prof_b["comprehension"], sort_keys=True),
+        )
+        before = json.dumps(prof_a["comprehension"], sort_keys=True)
+        comp_mod.merge(
+            prof_a, dict(comp, audit={cid_a: {"verdict": "PASS", "evidence": "ok"}})
+        )
+        self.assertEqual(before, json.dumps(prof_a["comprehension"], sort_keys=True))
+
+    def test_audit_targets_invariant_declared(self):
+        self.assertIn("audit_targets_exist", schema.DEFAULT_L0_INVARIANTS)
+
+    def test_audit_nonmember_fails_the_gate_through_run_qa(self):
+        # The gate independently rejects a hand-crafted present block with a bad
+        # audit key, attributing it to its own ``audit_targets_exist`` id.
+        prof = _docx_profile_with_inventory()
+        prof["comprehension"] = {
+            "schema_version": "comprehension-1",
+            "status": "present",
+            "source_shell_sha256": "abc123",
+            "confidence": 0.5,
+            "cover_slots": {},
+            "conventions": {"indexes": [], "sections": []},
+            "role_annotations": {},
+            "demo_classification": {"regions": []},
+            "audit": {"ghost-id": {"verdict": "PASS"}},
+        }
+        report = run_qa(None, prof, qa="fast", shell=None)
+        self.assertFalse(report.passed)
+        audit_errs = [f for f in report.findings if f.check == "audit_targets_exist"]
+        self.assertTrue(audit_errs, [f.message for f in report.findings])
+        self.assertEqual(audit_errs[0].severity, "ERROR")
+        # EXCLUSIVITY: the bad audit key is attributed ONLY to audit_targets_exist -
+        # check_comprehension_targets skips comprehension.audit problems, so the same
+        # key never double-reports under comprehension_targets_exist.
+        comp_errs = [
+            f
+            for f in report.findings
+            if f.check == "comprehension_targets_exist"
+            and "comprehension.audit" in f.message
+        ]
+        self.assertEqual(comp_errs, [], [f.message for f in report.findings])
+
+    def test_absent_audit_is_byte_identical(self):
+        # An old profile with no `audit`/`triage` key round-trips merge unchanged.
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()  # no audit/triage key
+        res = comp_mod.merge(prof, comp)
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(prof["comprehension"]["audit"], {})
+        self.assertEqual(prof["comprehension"]["triage"], [])
+
+
+class TriageSinkTest(unittest.TestCase):
+    """C2: the model-assisted QA-triage list (`comprehension.triage`)."""
+
+    def test_triage_targets_invariant_declared(self):
+        self.assertIn("triage_targets_exist", schema.DEFAULT_L0_INVARIANTS)
+
+    def test_triage_eligible_set_is_closed(self):
+        # The eligible set is exactly the three WARNING-only ambiguous checks, and
+        # NONE of them is an ERROR-emitting check (the merge-side belt that makes an
+        # ERROR-aimed triage entry impossible).
+        self.assertEqual(
+            schema.AMBIGUOUS_TRIAGE_CHECKS,
+            frozenset({"visual.blank_page", "visual.edge_bleed", "component_survival"}),
+        )
+
+    def test_triage_dispositions_are_closed(self):
+        self.assertEqual(schema.TRIAGE_DISPOSITIONS, frozenset({"expected", "defect"}))
+
+    def test_valid_triage_entry_merges(self):
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()
+        comp["triage"] = [
+            {
+                "check": "visual.edge_bleed",
+                "location": "page:1:bottom",
+                "disposition": "expected",
+                "evidence": "full-bleed cover by design",
+            }
+        ]
+        res = comp_mod.merge(prof, comp)
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(len(prof["comprehension"]["triage"]), 1)
+        self.assertEqual(prof["comprehension"]["triage"][0]["disposition"], "expected")
+
+    def test_triage_entry_naming_error_check_rejected_at_merge(self):
+        # A triage entry naming an ERROR-emitting check (NOT in the eligible set) is
+        # fail-closed rejected at merge: it can never reach the gate to demote an ERROR.
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()
+        comp["triage"] = [
+            {
+                "check": "no_residual_template_text",  # an ERROR check, not eligible
+                "location": None,
+                "disposition": "expected",
+            }
+        ]
+        res = comp_mod.merge(prof, comp)
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["comprehension"]["status"], "rejected")
+        self.assertTrue(
+            any("no_residual_template_text" in p for p in res.problems), res.problems
+        )
+
+    def test_unknown_disposition_rejected(self):
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()
+        comp["triage"] = [
+            {
+                "check": "visual.blank_page",
+                "location": "page:2",
+                "disposition": "ignore",  # not in the closed enum
+            }
+        ]
+        res = comp_mod.merge(prof, comp)
+        self.assertFalse(res.ok)
+        self.assertTrue(any("disposition" in p for p in res.problems), res.problems)
+
+    def test_duplicate_check_location_rejected(self):
+        prof = _docx_profile_with_inventory()
+        comp = _valid_comp()
+        comp["triage"] = [
+            {
+                "check": "component_survival",
+                "location": "tables",
+                "disposition": "expected",
+            },
+            {
+                "check": "component_survival",
+                "location": "tables",
+                "disposition": "defect",
+            },
+        ]
+        res = comp_mod.merge(prof, comp)
+        self.assertFalse(res.ok)
+        self.assertTrue(
+            any("duplicate" in p.lower() for p in res.problems), res.problems
+        )
+
+    def test_triage_survives_merge_round_trip_byte_identical(self):
+        # Guards the _canonicalize triage arm: omit it and the triage is silently
+        # dropped. A re-merge must be byte-identical (idempotency).
+        prof_a = _docx_profile_with_inventory()
+        prof_b = _docx_profile_with_inventory()
+        entry = {
+            "check": "visual.edge_bleed",
+            "location": "page:1:bottom",
+            "disposition": "expected",
+            "evidence": "ok",
+        }
+        comp = dict(_valid_comp(), triage=[dict(entry)])
+        res_a = comp_mod.merge(prof_a, comp)
+        self.assertTrue(res_a.ok, res_a.problems)
+        self.assertEqual(len(prof_a["comprehension"]["triage"]), 1)
+        comp_mod.merge(prof_b, dict(_valid_comp(), triage=[dict(entry)]))
+        self.assertEqual(
+            json.dumps(prof_a["comprehension"], sort_keys=True),
+            json.dumps(prof_b["comprehension"], sort_keys=True),
+        )
+        before = json.dumps(prof_a["comprehension"], sort_keys=True)
+        comp_mod.merge(prof_a, dict(_valid_comp(), triage=[dict(entry)]))
+        self.assertEqual(before, json.dumps(prof_a["comprehension"], sort_keys=True))
+
+    def test_triage_entry_naming_error_check_fails_the_gate(self):
+        # The gate independently rejects a hand-crafted present block whose triage
+        # names a non-eligible check, attributing it to ``triage_targets_exist``.
+        prof = _docx_profile_with_inventory()
+        prof["comprehension"] = {
+            "schema_version": "comprehension-1",
+            "status": "present",
+            "source_shell_sha256": "abc123",
+            "confidence": 0.5,
+            "cover_slots": {},
+            "conventions": {"indexes": [], "sections": []},
+            "role_annotations": {},
+            "demo_classification": {"regions": []},
+            "triage": [
+                {"check": "no_residual_template_text", "disposition": "expected"}
+            ],
+        }
+        report = run_qa(None, prof, qa="fast", shell=None)
+        self.assertFalse(report.passed)
+        self.assertTrue(
+            any(
+                f.check == "triage_targets_exist" and f.severity == "ERROR"
+                for f in report.findings
+            ),
+            [f.message for f in report.findings],
+        )
+
+    def test_absent_triage_is_byte_identical(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(prof, _valid_comp())  # no triage key
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(prof["comprehension"]["triage"], [])
+
+
 def _comp_with_fragment(kind="component", ref="note_box", blocks=None):
     """A comprehension proposing one reusable fragment (no inventory refs)."""
     if blocks is None:
@@ -617,6 +888,318 @@ class PaletteAnnotationsTest(unittest.TestCase):
         prof["comprehension"]["palette_annotations"] = {"accent1": {"name": 123}}
         problems = schema.validate(prof)
         self.assertTrue(any("palette_annotations" in p for p in problems), problems)
+
+
+class OverlayRefinementTest(unittest.TestCase):
+    """C3: the pure overlay primitive (delta over the EXISTING sinks, closed-key)."""
+
+    def test_overlay_preserves_existing_sinks(self):
+        # The overlay trap: a raw delta would wipe the other sinks; overlay must keep
+        # role_annotations/conventions etc. that the delta does not mention.
+        prof = _docx_profile_with_inventory()
+        comp_mod.merge(prof, _valid_comp())
+        existing = prof["comprehension"]
+        delta = {"role_annotations": {"cover.title": {"purpose": "cover headline"}}}
+        out = comp_mod.overlay_refinement(existing, delta)
+        # The delta's new role_annotation is present...
+        self.assertIn("cover.title", out["role_annotations"])
+        # ...and the pre-existing caption annotation was NOT dropped.
+        self.assertIn("caption", out["role_annotations"])
+        # Untouched sinks survive verbatim.
+        self.assertEqual(out["cover_slots"], existing["cover_slots"])
+        self.assertEqual(out["conventions"], existing["conventions"])
+
+    def test_overlay_is_pure_does_not_mutate_inputs(self):
+        existing = {"role_annotations": {"caption": {"purpose": "old"}}}
+        existing_snapshot = json.dumps(existing, sort_keys=True)
+        comp_mod.overlay_refinement(
+            existing, {"role_annotations": {"caption": {"purpose": "new"}}}
+        )
+        self.assertEqual(json.dumps(existing, sort_keys=True), existing_snapshot)
+
+    def test_overlay_map_sink_replaces_matching_key(self):
+        existing = {"role_annotations": {"caption": {"purpose": "old"}}}
+        out = comp_mod.overlay_refinement(
+            existing, {"role_annotations": {"caption": {"purpose": "new"}}}
+        )
+        self.assertEqual(out["role_annotations"]["caption"]["purpose"], "new")
+
+    def test_overlay_lists_merge_by_ref_no_dup(self):
+        # demo_classification.regions and conventions.* merge BY ref, never concat.
+        existing = {
+            "demo_classification": {
+                "regions": [{"region_ref": "body.demo", "verdict": "demo"}]
+            },
+            "conventions": {
+                "indexes": [{"index_ref": "tot.1", "reconcile": "regenerate"}],
+                "sections": [{"region_ref": "body.demo", "required": False}],
+            },
+        }
+        delta = {
+            "demo_classification": {
+                "regions": [{"region_ref": "body.demo", "verdict": "real"}]
+            },
+            "conventions": {
+                "sections": [{"region_ref": "body.demo", "required": True}],
+            },
+        }
+        out = comp_mod.overlay_refinement(existing, delta)
+        # Region replaced in place, not duplicated.
+        regs = out["demo_classification"]["regions"]
+        self.assertEqual(len(regs), 1)
+        self.assertEqual(regs[0]["verdict"], "real")
+        # Section replaced in place, not duplicated.
+        secs = out["conventions"]["sections"]
+        self.assertEqual(len(secs), 1)
+        self.assertTrue(secs[0]["required"])
+        # The index the delta did not mention survives.
+        self.assertEqual(len(out["conventions"]["indexes"]), 1)
+
+    def test_overlay_appends_new_ref(self):
+        existing = {
+            "demo_classification": {
+                "regions": [{"region_ref": "body.demo", "verdict": "demo"}]
+            }
+        }
+        out = comp_mod.overlay_refinement(
+            existing,
+            {
+                "demo_classification": {
+                    "regions": [{"region_ref": "body.new", "verdict": "real"}]
+                }
+            },
+        )
+        refs = {r["region_ref"] for r in out["demo_classification"]["regions"]}
+        self.assertEqual(refs, {"body.demo", "body.new"})
+
+    def test_overlay_ignores_unknown_and_structural_keys(self):
+        # A delta cannot smuggle a new field or shadow a structural/QA-verdict one.
+        existing = {"role_annotations": {"caption": {"purpose": "x"}}}
+        out = comp_mod.overlay_refinement(
+            existing,
+            {
+                "source_shell_sha256": "evil",
+                "status": "present",
+                "audit": {"x": {"verdict": "PASS"}},
+                "triage": [{"check": "visual.blank_page", "disposition": "expected"}],
+                "fragments": [{"ref": "z", "kind": "component"}],
+                "bogus_field": 1,
+            },
+        )
+        # None of those keys leaked through the overlay.
+        self.assertNotIn("source_shell_sha256", out)
+        self.assertNotIn("bogus_field", out)
+        self.assertNotIn("audit", out)
+        self.assertNotIn("triage", out)
+        self.assertNotIn("fragments", out)
+        # The pre-existing sink is untouched.
+        self.assertEqual(out["role_annotations"], existing["role_annotations"])
+
+
+class CliRefineTest(unittest.TestCase):
+    """C3: the ``refine`` CLI verb routes the overlaid delta through merge."""
+
+    def _extracted(self, tmp):
+        import os
+        from brandkit.cli import main
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
+        from test_smoke import _synthetic_template
+
+        template = tmp / "t.docx"
+        _synthetic_template(template)
+        rc = main(
+            [
+                "extract",
+                "--name",
+                "acme",
+                "--template",
+                str(template),
+                "--scope",
+                "project",
+            ]
+        )
+        self.assertEqual(rc, 0)
+        return os, main
+
+    def _surfaced_role(self, tmp):
+        prof = json.loads((tmp / "brand-kit" / "acme" / "profile.json").read_text())
+        roles = schema.list_role_ids(prof)
+        self.assertTrue(roles, "test profile must surface at least one role")
+        return roles[0]
+
+    def test_refine_without_accept_does_not_persist_live(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            old = Path.cwd()
+            os.chdir(tmp)
+            try:
+                _os, main = self._extracted(tmp)
+                rid = self._surfaced_role(tmp)
+                ref = tmp / "ref.json"
+                ref.write_text(
+                    json.dumps({"role_annotations": {rid: {"purpose": "feedback"}}}),
+                    encoding="utf-8",
+                )
+                # No --accept: returns 0 but the on-disk block stays absent (prior).
+                self.assertEqual(
+                    main(
+                        [
+                            "refine",
+                            "--name",
+                            "acme",
+                            "--input",
+                            str(ref),
+                            "--scope",
+                            "project",
+                        ]
+                    ),
+                    0,
+                )
+                prof = json.loads(
+                    (tmp / "brand-kit" / "acme" / "profile.json").read_text()
+                )
+                self.assertEqual(prof["comprehension"]["status"], "absent")
+                self.assertEqual(prof["comprehension"]["role_annotations"], {})
+                # --accept persists the refined present block.
+                self.assertEqual(
+                    main(
+                        [
+                            "refine",
+                            "--name",
+                            "acme",
+                            "--input",
+                            str(ref),
+                            "--scope",
+                            "project",
+                            "--accept",
+                        ]
+                    ),
+                    0,
+                )
+                prof2 = json.loads(
+                    (tmp / "brand-kit" / "acme" / "profile.json").read_text()
+                )
+                self.assertEqual(prof2["comprehension"]["status"], "present")
+                self.assertEqual(
+                    prof2["comprehension"]["role_annotations"][rid]["purpose"],
+                    "feedback",
+                )
+                self.assertTrue(prof2["comprehension"]["source_shell_sha256"])
+            finally:
+                os.chdir(old)
+
+    def test_refine_delta_binds_only_surfaced_ids(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            old = Path.cwd()
+            os.chdir(tmp)
+            try:
+                _os, main = self._extracted(tmp)
+                ref = tmp / "ref.json"
+                ref.write_text(
+                    json.dumps({"role_annotations": {"ghost.role": {"purpose": "x"}}}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "refine",
+                            "--name",
+                            "acme",
+                            "--input",
+                            str(ref),
+                            "--scope",
+                            "project",
+                            "--accept",
+                        ]
+                    ),
+                    1,
+                )
+                # All-or-nothing: a rejected refinement leaves the prior block untouched
+                # (still absent), never a half-written present block.
+                prof = json.loads(
+                    (tmp / "brand-kit" / "acme" / "profile.json").read_text()
+                )
+                self.assertEqual(prof["comprehension"]["status"], "absent")
+            finally:
+                os.chdir(old)
+
+    def test_refine_merges_as_delta_over_existing_sinks(self):
+        # A second refinement of a DIFFERENT sink key must not drop the first one:
+        # the overlay is a per-sink delta over the EXISTING block, not a replace-all
+        # (which is what passing the raw delta to merge would do - the overlay trap).
+        import os
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            old = Path.cwd()
+            os.chdir(tmp)
+            try:
+                _os, main = self._extracted(tmp)
+                prof0 = json.loads(
+                    (tmp / "brand-kit" / "acme" / "profile.json").read_text()
+                )
+                roles = schema.list_role_ids(prof0)
+                self.assertGreaterEqual(
+                    len(roles), 2, "test needs two surfaced roles for this case"
+                )
+                rid_a, rid_b = roles[0], roles[1]
+                ref1 = tmp / "ref1.json"
+                ref1.write_text(
+                    json.dumps({"role_annotations": {rid_a: {"purpose": "first"}}}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "refine",
+                            "--name",
+                            "acme",
+                            "--input",
+                            str(ref1),
+                            "--scope",
+                            "project",
+                            "--accept",
+                        ]
+                    ),
+                    0,
+                )
+                # A second refinement annotates a DIFFERENT role; the overlay must add
+                # it WITHOUT dropping the first role's annotation.
+                ref2 = tmp / "ref2.json"
+                ref2.write_text(
+                    json.dumps({"role_annotations": {rid_b: {"purpose": "second"}}}),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "refine",
+                            "--name",
+                            "acme",
+                            "--input",
+                            str(ref2),
+                            "--scope",
+                            "project",
+                            "--accept",
+                        ]
+                    ),
+                    0,
+                )
+                prof = json.loads(
+                    (tmp / "brand-kit" / "acme" / "profile.json").read_text()
+                )
+                ann = prof["comprehension"]["role_annotations"]
+                # Both refinements coexist (delta-over-existing, not replace-all).
+                self.assertEqual(ann[rid_a]["purpose"], "first")
+                self.assertEqual(ann[rid_b]["purpose"], "second")
+            finally:
+                os.chdir(old)
 
 
 class CliComprehendTest(unittest.TestCase):

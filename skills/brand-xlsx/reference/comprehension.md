@@ -120,11 +120,13 @@ Concretely, in the comprehension JSON:
   the facts bundle**. If an id is not in the surfaced inventory, do not invent it;
   the merge is fail-closed and will reject it (a ref into an empty inventory is
   itself an error).
-- Six fields are closed enums, and each maps to a real engine branch:
+- Eight fields are closed enums, and each maps to a real engine branch:
   `status` (`present|absent|rejected`), `fill_rule` (`in_place|clear|leave`),
   `reconcile` (`regenerate|preserve|clear`), `verdict` (`demo|real|mixed`), a
-  `fragments` entry's `kind` (`component|section`), and a caption index's
-  `caption_target` (`table|figure`). Use exactly those values.
+  `fragments` entry's `kind` (`component|section`), a caption index's
+  `caption_target` (`table|figure`), an `audit` row's `verdict`
+  (`PASS|FAIL|NA`), and a `triage` entry's `disposition` (`expected|defect`). Use
+  exactly those values.
 - Every other field (`semantic_role`, an index's `kind`, `purpose`,
   `generation_rules`, `evidence`, region names) is an **open advisory token**. The
   generator never pattern-matches on it, so write it honestly for a human reader;
@@ -202,3 +204,118 @@ proposal, and each lands in the profile's `components` / `sections` registry for
 style, color, or layout), so a proposed fragment resolves through the same brand
 chokepoint as inline content and cannot be off-brand. Propose fragments only when
 a shape genuinely recurs; an empty `fragments` list is the norm.
+
+## Persisting the visual-audit verdict (the `audit` map)
+
+After a `generate --qa deep|strict` run, the engine writes a `visual_manifest.json`
+side artifact listing the rendered PNG pages, the exact-artifact `shell_sha256` /
+`content_sha256`, and a profile-derived `checklist` (each item has an `id`). You
+(the model) open the pages and judge each checklist item. You MAY persist that
+judgement back into the comprehension as an `audit` map, keyed by the manifest's
+`checklist[*].id`, then merge it via `comprehend`:
+
+```jsonc
+"audit": {
+  "<checklist-id>": {
+    "verdict": "PASS",                       // PASS|FAIL|NA (closed enum)
+    "evidence": "cover title is bound, no residual demo prompt",
+    "shell_sha256": "<manifest.shell_sha256>",
+    "content_sha256": "<manifest.content_sha256>"
+  }
+}
+```
+
+The `audit` key MUST be a verbatim `checklist[*].id` from the manifest; a key that
+is not a current checklist id is fail-closed and rejected at merge (same rule as
+every other load-bearing ref). `verdict` is the closed `PASS|FAIL|NA`; `evidence`
+is advisory free text for a human; the two shas are copied verbatim from the
+manifest so the verdict is scoped to that exact artifact. You never write a brand
+value here, only a disposition against a structural checklist id the engine derived.
+
+This makes the next `generate` cheaper: a same-shell / same-content `generate`
+**short-circuits** the L2 render+manifest round when every current checklist item
+PASSes at the matching `(shell_sha256, content_sha256)`. Any `FAIL`, any `NA`, a
+newly-derived checklist id with no row, or a sha mismatch forces a full L2 round,
+so the short-circuit can never hide a regression. It is disabled under `--qa
+strict` (which always re-renders) and never fires at `verify`. An empty `audit`
+map is the norm until you have judged a render.
+
+## Triaging an ambiguous QA warning (the `triage` list)
+
+Some QA checks emit a **WARNING** because the signal is genuinely ambiguous: a
+full-bleed cover that the edge-bleed proxy flags, a deliberately blank section
+page, or a native component family the new content legitimately has fewer of. When
+you (the model) have judged that such a WARNING is an EXPECTED property of this
+template - not a defect - you MAY persist that judgement as a `triage` list,
+merged via `comprehend`:
+
+```jsonc
+"triage": [
+  {
+    "check": "visual.edge_bleed",            // expected|defect maps the disposition
+    "location": "page:1:bottom",             // the finding's exact location (or null)
+    "disposition": "expected",               // expected -> demote that WARNING to INFO
+    "evidence": "the cover is intentionally full-bleed in this brand"
+  }
+]
+```
+
+Only three checks are triage-eligible, and they are ALL WARNING-only:
+`visual.blank_page`, `visual.edge_bleed`, and `component_survival`. A `triage`
+entry naming any other check is fail-closed and rejected at merge, and two entries
+for the same `(check, location)` pair are rejected as ambiguous. `disposition` is
+the closed `expected|defect`; `location` is copied verbatim from the QA finding (it
+may be null); `evidence` is advisory free text for a human.
+
+The effect is deliberately narrow and one-directional: an `expected` entry demotes
+exactly the matched WARNING to INFO (the message keeps a `(triaged EXPECTED: ...)`
+note); a `defect` entry, or any entry that does not match a finding, leaves the
+gate verbatim. **A triage entry can NEVER turn an ERROR into a warning, nor raise a
+severity** - the eligible checks are WARNING-only and the demotion only ever lowers
+a WARNING to INFO, so a real failure can never be silenced. An empty `triage` list
+is the norm.
+
+## Refining the understanding from user feedback (the `refine` verb)
+
+After a generation, the user may give qualitative feedback - in **text** or as a
+**screenshot** of the produced file. You turn that answer into a small,
+**structured refinement delta** of verbatim ids and merge it with the `refine`
+verb:
+
+```bash
+# Overlay the delta onto the EXISTING comprehension, then re-validate the whole block.
+python scripts/brandkit/cli.py refine --name <brand> --input refinement.json
+# Add --accept to persist the refined comprehension (else the diff is previewed).
+python scripts/brandkit/cli.py refine --name <brand> --input refinement.json --accept
+```
+
+A refinement delta touches ONLY the existing qualitative-understanding sinks -
+`role_annotations`, `palette_annotations`, `demo_classification`, `cover_slots`,
+and `conventions` (`indexes` / `sections`). It is **not** a schema change and it
+never writes a brand value: a palette annotation carries only `name` / `purpose` /
+`use_when` / `semantic_role` (the `ref` / hex stay the deterministic capture's),
+and every ref is still a **verbatim id** from the surfaced inventories.
+
+```jsonc
+"palette_annotations": {
+  "<color-1>": { "name": "primary brand", "use_when": "section headings" }
+},
+"role_annotations": {
+  "heading.1": { "purpose": "section titles", "generation_rules": "keep terse" }
+}
+```
+
+The verb **overlays** the delta onto the present block (replacing or adding the
+named sink entries; list sinks merge by their ref, never naive concat), then routes
+the WHOLE combined block back through `comprehend`'s single fail-closed writer: the
+full schema + membership validation re-runs and every ref re-binds to
+`surface_inventories`, so a delta naming an id that is not surfaced (or one in an
+empty inventory) is rejected and nothing is written. Without `--accept` the
+post-overlay diff is previewed and the prior block stays authoritative; `--accept`
+persists it and re-stamps `source_shell_sha256`.
+
+A **screenshot** is YOUR multimodal read of the produced file; the engine only ever
+ingests the resulting structured JSON delta of verbatim ids - it never sees the
+image. The feedback ask happens **only after** the file and its QA summary are
+returned, never before or during generation, and a refinement improves **FUTURE**
+generations - it never re-emits or edits the file you just produced.

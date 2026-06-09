@@ -717,6 +717,12 @@ def check_comprehension_targets(profile: dict) -> list[Finding]:
     comprehension is absent (status != present), keeping the model-free CI path and
     pptx/xlsx green. Delegates to the single membership definition so the gate and
     the merge writer can never disagree.
+
+    ``check_membership`` returns ALL membership problems, including the C1 audit-arm
+    ``comprehension.audit`` keys. Those are attributed SOLELY to ``audit_targets_exist``
+    by :func:`check_audit_targets`, so they are skipped here - else one bad audit key
+    would double-report (one ``comprehension_targets_exist`` + one
+    ``audit_targets_exist``). The skip is symmetric to ``check_audit_targets``' keep.
     """
     comp = profile.get("comprehension")
     if (
@@ -726,8 +732,77 @@ def check_comprehension_targets(profile: dict) -> list[Finding]:
         return []
     findings: list[Finding] = []
     for problem in comprehensionmod.check_membership(profile, comp):
+        if problem.startswith("comprehension.audit"):
+            continue  # attributed to audit_targets_exist (check_audit_targets)
         findings.append(
             Finding("comprehension_targets_exist", schema.Severity.ERROR.value, problem)
+        )
+    return findings
+
+
+def check_audit_targets(profile: dict) -> list[Finding]:
+    """FAIL-CLOSED membership of every persisted L2 visual-audit verdict key (C1).
+
+    The audit peer of :func:`check_comprehension_targets`: every
+    ``comprehension.audit`` key must be a verbatim id from the profile's derived
+    visual checklist; a key not in that set (or any key when the derived checklist
+    is empty) is an ERROR (this is the SOLE gate for audit keys, so it must reject,
+    never skip). No-ops when the comprehension is absent (status != present),
+    keeping the model-free CI path and pptx/xlsx green. Delegates to the single
+    membership definition (``check_membership``'s audit arm, which itself binds to
+    ``qa.visual.visual_checklist_ids``) so the gate and the merge writer can never
+    disagree about which checklist ids exist.
+
+    A surfaced finding here emits ``audit_targets_exist`` (the
+    :data:`schema.DEFAULT_L0_INVARIANTS` id) rather than the
+    ``comprehension_targets_exist`` id that ``check_membership`` problems carry under
+    :func:`check_comprehension_targets`, so the verdict-key violation is attributable
+    to its own invariant. ``check_membership`` returns ALL membership problems
+    (anchor/index/region/role/palette + audit); we keep only the audit ones here so
+    the two checks do not double-report the same anchor/index problem.
+    """
+    comp = profile.get("comprehension")
+    if (
+        not isinstance(comp, dict)
+        or comp.get("status") != schema.ComprehensionStatus.PRESENT.value
+    ):
+        return []
+    findings: list[Finding] = []
+    for problem in comprehensionmod.check_membership(profile, comp):
+        if problem.startswith("comprehension.audit"):
+            findings.append(
+                Finding("audit_targets_exist", schema.Severity.ERROR.value, problem)
+            )
+    return findings
+
+
+def check_triage_targets(profile: dict) -> list[Finding]:
+    """FAIL-CLOSED membership of every model-assisted QA-triage entry (Cluster C2).
+
+    The triage peer of :func:`check_audit_targets`: every ``comprehension.triage``
+    entry must name a check in the closed :data:`schema.AMBIGUOUS_TRIAGE_CHECKS` set,
+    and each ``(check, location)`` pair must be unique across the proposal. A
+    non-eligible check or a duplicate pair is an ERROR (this is the SOLE gate for
+    triage entries, so it must reject, never skip). No-ops when the comprehension is
+    absent (status != present), keeping the model-free CI path and pptx/xlsx green.
+    Delegates to the single membership definition (``check_triage``) so the gate and
+    the merge writer can never disagree about which checks are triage-eligible.
+
+    Because the eligible set is WARNING-only, a triage entry can never even be aimed
+    at an ERROR-emitting check - it would be rejected here as a non-member. That is
+    the belt to ``qa.gate._apply_triage``'s ``severity == WARNING`` suspenders, so an
+    ERROR can NEVER be demoted.
+    """
+    comp = profile.get("comprehension")
+    if (
+        not isinstance(comp, dict)
+        or comp.get("status") != schema.ComprehensionStatus.PRESENT.value
+    ):
+        return []
+    findings: list[Finding] = []
+    for problem in comprehensionmod.check_triage(profile, comp):
+        findings.append(
+            Finding("triage_targets_exist", schema.Severity.ERROR.value, problem)
         )
     return findings
 
@@ -1365,6 +1440,10 @@ def check_component_survival(shell, output, profile: dict) -> list[Finding]:
                     schema.Severity.WARNING.value,
                     f"native {family} count dropped {before} -> {after} "
                     f"between shell and output (possible down-render)",
+                    # Cluster C2: the dropped FAMILY is the addressable location, so
+                    # two dropped families no longer collide on (check, None) and a
+                    # model-assisted triage entry can name a single family precisely.
+                    location=family,
                 )
             )
     return findings
