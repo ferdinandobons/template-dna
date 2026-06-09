@@ -16,4 +16,5 @@ Long-form documentation for [BrandDocs](../README.md). The top-level
 | [PLUGIN_WORKFLOW.md](PLUGIN_WORKFLOW.md) | The full end-to-end agent workflow: skill selection, preflight, extract/comprehend/generate/QA, visual manifests, repair rounds. |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Local dev setup, test suites, and contribution conventions. |
 | [FAQ.md](FAQ.md) | Frequently asked questions and discovery keywords. |
+| [ROADMAP.md](ROADMAP.md) | Planned, designed-but-not-yet-built features (typography capture, profile learning from QA findings) and salvaged visual-audit ideas. |
 | [DIRECTORY_SUBMISSIONS.md](DIRECTORY_SUBMISSIONS.md) | Reusable copy, categories and tags for listing BrandDocs in directories. |
