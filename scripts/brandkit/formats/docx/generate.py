@@ -98,7 +98,7 @@ def generate(
     # Write the body blocks in the order given (the body region is freeform).
     resolver = ProfileResolver(profile)
     for block in idoc.blocks:
-        _write_block(doc, profile, resolver, block, sink)
+        _write_block(doc, resolver, block, sink)
 
     # Keep the visible TOC field cache aligned for renderers that do not update
     # fields in headless export. The field itself remains dirty/updateable.
@@ -344,7 +344,6 @@ def _para_with_runs(doc, runs):
 
 def _write_block(
     doc,
-    profile: dict,
     resolver: ProfileResolver,
     block: ir.Block,
     findings: list[Finding],

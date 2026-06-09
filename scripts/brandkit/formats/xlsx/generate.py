@@ -89,7 +89,7 @@ def generate(
     # keeps it impossible by construction. ``None`` values are skipped so a sparse
     # cell write never blanks a preserved cell.
     for name, value in grid.cells.items():
-        target = _resolve_named_target(resolver, name_to_role, regions, name, sink)
+        target = _resolve_named_target(resolver, name_to_role, regions, name)
         sheet, coord = target["sheet"], target["range"]
         min_col, min_row, _, _ = range_boundaries(coord)
         cell = wb[sheet].cell(row=min_row, column=min_col)
@@ -109,7 +109,7 @@ def generate(
     # straddles formula cells (e.g. a body range whose trailing columns are SUM/IF
     # totals) must refill only its literal cells, never erase the formulas.
     for name, values in grid.regions.items():
-        target = _resolve_named_target(resolver, name_to_role, regions, name, sink)
+        target = _resolve_named_target(resolver, name_to_role, regions, name)
         sheet, coord = target["sheet"], target["range"]
         min_col, min_row, max_col, max_row = range_boundaries(coord)
         _check_region_bounds(
@@ -315,7 +315,7 @@ def _name_to_role(profile: dict) -> dict[str, str]:
     return out
 
 
-def _resolve_named_target(resolver, name_to_role, regions, name, findings) -> dict:
+def _resolve_named_target(resolver, name_to_role, regions, name) -> dict:
     """Resolve a grid key (a named-range name) to its ``{sheet, range}`` target.
 
     Routes through the shared spine: the name maps to a role id, the resolver op

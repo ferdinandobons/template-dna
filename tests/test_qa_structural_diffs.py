@@ -151,7 +151,6 @@ class FormulaPreservationCheckTest(unittest.TestCase):
             report = run_qa(
                 str(out),
                 loaded.profile,
-                mode="generate",
                 qa="fast",
                 shell=loaded.shell_path,
             )
@@ -170,7 +169,6 @@ class FormulaPreservationCheckTest(unittest.TestCase):
             report = run_qa(
                 str(out),
                 loaded.profile,
-                mode="generate",
                 qa="fast",
                 shell=loaded.shell_path,
             )

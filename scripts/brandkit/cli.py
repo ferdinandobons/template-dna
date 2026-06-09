@@ -101,9 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR extract: {exc}")
             return 1
         loaded = store.load_profile(args.name, args.scope)
-        report = run_qa(
-            None, loaded.profile, mode="verify", qa="fast", shell=loaded.shell_path
-        )
+        report = run_qa(None, loaded.profile, qa="fast", shell=loaded.shell_path)
         loaded.profile["verification"]["status"] = report.verdict
         loaded.profile["verification"]["roles_total"] = len(
             schema.list_role_ids(loaded.profile)
@@ -116,9 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.passed else 1
     if args.cmd == "verify":
         loaded = store.load_profile(args.name, args.scope)
-        report = run_qa(
-            None, loaded.profile, mode="verify", qa=args.qa, shell=loaded.shell_path
-        )
+        report = run_qa(None, loaded.profile, qa=args.qa, shell=loaded.shell_path)
         loaded.profile["verification"]["status"] = report.verdict
         if args.accept and report.passed:
             loaded.profile.setdefault("verification", {})["accepted"] = True
@@ -167,7 +163,6 @@ def main(argv: list[str] | None = None) -> int:
         report = run_qa(
             out,
             loaded.profile,
-            mode="generate",
             qa=args.qa,
             shell=loaded.shell_path,
             extra_findings=gen_findings,

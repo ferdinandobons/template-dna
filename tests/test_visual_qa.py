@@ -955,6 +955,42 @@ class GateWiringTest(unittest.TestCase):
         self.assertTrue(any("visual.blank_page" in f.message for f in strict))
         self.assertEqual(data["qa_mode"], "strict")
 
+    def test_run_qa_strict_promotes_ocr_degraded_to_error(self) -> None:
+        # A flaky/failed OCR pass (status='failed' with errors) surfaces a
+        # visual.ocr_degraded INFO, which strict mode must promote to a blocking
+        # visual.strict ERROR. Use non-blank content so blank_page does not also fire.
+        def fake_ocr(*args, **kwargs):
+            return {
+                "engine": "tesseract",
+                "available": True,
+                "status": "failed",
+                "terms_checked": [],
+                "pages": [],
+                "hits": [],
+                "errors": [{"page": 1, "error": "tesseract crashed"}],
+            }
+
+        with patch.object(vqa, "run_visual_ocr", fake_ocr):
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                target = td / "out.docx"
+                out_dir = td / "out.visual"
+                _real_docx(target)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                png = out_dir / "page-1.png"
+                _centered_content().save(png)  # not blank -> isolates ocr_degraded
+                report = gate.run_qa(
+                    target,
+                    _minimal_profile(),
+                    qa="strict",
+                    out_dir=out_dir,
+                    visual=(True, [png]),
+                )
+
+        self.assertFalse(report.passed)
+        strict = [f for f in report.findings if f.check == "visual.strict"]
+        self.assertTrue(any("visual.ocr_degraded" in f.message for f in strict), strict)
+
     def test_run_qa_deep_surfaces_ocr_hits_in_manifest(self) -> None:
         def fake_ocr(*args, **kwargs):
             return {
@@ -1182,7 +1218,7 @@ class GateWiringTest(unittest.TestCase):
             raise AssertionError("no render at verify time (target is None)")
 
         with patch.object(vqa, "render_to_pngs", boom):
-            report = gate.run_qa(None, _minimal_profile(), mode="verify", qa="deep")
+            report = gate.run_qa(None, _minimal_profile(), qa="deep")
         self.assertEqual(called["n"], 0)
         self.assertFalse(any(f.check.startswith("visual.") for f in report.findings))
 
@@ -1210,8 +1246,8 @@ class BackwardCompatTest(unittest.TestCase):
                 target = Path(td) / "out.docx"
                 _real_docx(target)
                 profile = _minimal_profile()
-                fast = gate.run_qa(target, profile, mode="generate", qa="fast")
-                auto = gate.run_qa(target, profile, mode="generate", qa="auto")
+                fast = gate.run_qa(target, profile, qa="fast")
+                auto = gate.run_qa(target, profile, qa="auto")
         # Exit code (passed) is invariant -- the real backward-compat promise.
         self.assertEqual(fast.passed, auto.passed)
         self.assertTrue(auto.passed)
@@ -1505,6 +1541,24 @@ class OcrRobustnessTest(unittest.TestCase):
             text, err = vqa._ocr_png("tesseract", Path("/x/page-1.png"), timeout_s=5)
         self.assertEqual(text, "")
         self.assertIsNotNone(err)  # error surfaced (decoded), run not crashed
+
+    def test_timeout_degrades_gracefully(self) -> None:
+        def fake_run(args, *unused_args, **unused_kwargs):
+            raise subprocess.TimeoutExpired(args, 5)
+
+        with patch.object(subprocess, "run", fake_run):
+            text, err = vqa._ocr_png("tesseract", Path("/x/page-1.png"), timeout_s=5)
+        self.assertEqual(text, "")
+        self.assertIn("timed out", err)
+
+    def test_oserror_degrades_gracefully(self) -> None:
+        def fake_run(args, *unused_args, **unused_kwargs):
+            raise OSError("no such binary")
+
+        with patch.object(subprocess, "run", fake_run):
+            text, err = vqa._ocr_png("tesseract", Path("/x/page-1.png"), timeout_s=5)
+        self.assertEqual(text, "")
+        self.assertIn("failed", err)
 
 
 if __name__ == "__main__":

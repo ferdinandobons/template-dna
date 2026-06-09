@@ -348,9 +348,7 @@ class RealTemplateIntegrationTest(unittest.TestCase):
             td = Path(td)
             docx_extract.extract(REAL_TEMPLATE, "rt", scope="project", cwd=td)
             loaded = store.load_profile("rt", "project", cwd=td)
-            report = run_qa(
-                None, loaded.profile, mode="verify", qa="fast", shell=loaded.shell_path
-            )
+            report = run_qa(None, loaded.profile, qa="fast", shell=loaded.shell_path)
             self.assertTrue(report.passed, [f.message for f in report.findings])
             # no resolver_targets_exist ERROR on a real, faithful profile
             self.assertFalse(

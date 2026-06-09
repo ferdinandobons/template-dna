@@ -140,7 +140,7 @@ class ProvenanceDriftTest(unittest.TestCase):
             profile["provenance"]["shell"]["sha256"] = store.sha256_file(shell)
 
             shell.write_bytes(b"tampered-shell")
-            report = run_qa(None, profile, mode="verify", qa="fast", shell=shell)
+            report = run_qa(None, profile, qa="fast", shell=shell)
 
             self.assertFalse(report.passed)
             self.assertTrue(

@@ -195,7 +195,7 @@ class GateWiringTest(unittest.TestCase):
             "role_annotations": {},
             "demo_classification": {"regions": []},
         }
-        report = run_qa(None, prof, mode="verify", qa="fast", shell=None)
+        report = run_qa(None, prof, qa="fast", shell=None)
         self.assertFalse(report.passed)
         self.assertTrue(
             any(
@@ -207,7 +207,7 @@ class GateWiringTest(unittest.TestCase):
 
     def test_absent_comprehension_passes_the_gate(self):
         prof = _docx_profile_with_inventory()
-        report = run_qa(None, prof, mode="verify", qa="fast", shell=None)
+        report = run_qa(None, prof, qa="fast", shell=None)
         self.assertFalse(
             any(f.check == "comprehension_targets_exist" for f in report.findings)
         )

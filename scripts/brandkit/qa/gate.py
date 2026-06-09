@@ -34,7 +34,6 @@ def run_qa(
     target: str | Path | None,
     profile: dict,
     *,
-    mode: str = "generate",
     qa: str = "auto",
     shell: str | Path | None = None,
     extra_findings: list | None = None,

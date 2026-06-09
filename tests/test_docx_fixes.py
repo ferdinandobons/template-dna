@@ -360,7 +360,7 @@ class ResolverTargetsExistTest(unittest.TestCase):
                     },
                 }
             )
-            report = run_qa(None, prof, mode="verify", shell=shell)
+            report = run_qa(None, prof, shell=shell)
             self.assertEqual(report.verdict, schema.VerificationStatus.FAILED.value)
             self.assertTrue(
                 any(
@@ -387,7 +387,7 @@ class ResolverTargetsExistTest(unittest.TestCase):
                     },
                 }
             )
-            report = run_qa(None, prof, mode="verify", shell=shell)
+            report = run_qa(None, prof, shell=shell)
             self.assertTrue(report.passed)
 
 
@@ -404,7 +404,7 @@ class LiteralMarkdownGateTest(unittest.TestCase):
             d.add_paragraph("This has **bold** literal markdown that leaked.")
             d.save(out)
             prof = _docx_profile({"_index": []})
-            report = run_qa(out, prof, mode="generate", qa="fast")
+            report = run_qa(out, prof, qa="fast")
             self.assertEqual(report.verdict, schema.VerificationStatus.FAILED.value)
             self.assertTrue(
                 any(
@@ -1507,6 +1507,51 @@ class ComprehensionReconcileTest(unittest.TestCase):
             self.assertNotIn("Index of Tables", text)
             self.assertFalse(any(f.check == "index_clear_downgraded" for f in findings))
             self.assertFalse(any(f.check == "no_net_structure_loss" for f in findings))
+
+    def test_index_clear_corroborated_by_absent_captionables_only(self):
+        # The OTHER corroboration path: a CLEAR with NO demo verdict still fires when
+        # the new content has no captionables to feed the index (absence corroborates
+        # removal), distinct from the demo-verdict path above.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            prof = self._profile_for(shell)
+            s = prof["surface"]["docx"]
+            tabella = next(f["id"] for f in s["fields"] if f["seq_id"] == "Tabella")
+            comp = {
+                "conventions": {
+                    "indexes": [
+                        {
+                            "index_ref": tabella,
+                            "seq_id": "Tabella",
+                            "reconcile": "clear",
+                        }
+                    ],
+                    "sections": [],
+                },
+                "demo_classification": {"regions": []},  # NO demo verdict
+            }
+            _present_comp(prof, comp, confidence=0.9)
+            out = Path(td) / "out.docx"
+            findings: list[Finding] = []
+            docx_generate.generate(
+                prof,
+                shell,
+                # Content has NO captionable (no caption/table/image) -> nothing to
+                # feed the table index, which corroborates the clear by absence.
+                ir.IntermediateDocument(
+                    blocks=[ir.Heading(level=1, runs=[{"t": "Real Section"}])],
+                    cover=None,
+                ),
+                out,
+                findings=findings,
+            )
+            gen = Document(out)
+            text = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
+            self.assertNotIn("entry one", text)
+            self.assertNotIn("Index of Tables", text)
+            self.assertFalse(any(f.check == "index_clear_downgraded" for f in findings))
 
     def test_absent_comprehension_uses_deterministic_path(self):
         import tempfile
