@@ -406,12 +406,25 @@ they can ship independently.
 
 ### Cluster E - Faithfulness robustness (close known dead-ends)
 
+> **Status: E1+E2+E3+E4 ALL SHIPPED - cluster complete.** Palette aliases, faked-heading
+> promotion, the `appearance_apply_degraded` parity ledger, and universal cover synthesis
+> for `kind==NONE` are all live. E4 landed DETERMINISTIC-only (no new comprehension sink):
+> the synthesis triggers off the recorded `anchors.cover.kind == NONE` fact and builds
+> only from `cover.*` roles that resolve through `resolve_role` (docx paragraphs before
+> the first toc/body child; pptx cover slide on the role-resolved layout, including the
+> reconcile path; xlsx N/A - named ranges carry no cover-page concept). Every synthesized
+> cover is audited by an INFO `cover_synthesized` finding; the optional closed
+> `cover_layout` model authorization was evaluated and deferred (nothing for the model to
+> name that `resolve_role` does not already gate) and can land later as an additive
+> opt-in. Byte-identical whenever the fact is absent or nothing resolves; schema stays
+> 1.2.0.
+
 | # | Item | Value | Seam reused | Feas | Why universal |
 |---|---|---|---|---|---|
 | **E1** *(shipped)* | Off-theme accent reachability via palette aliases | mint a syntactically-legal dotted token aliasing a model-named `hex:RRGGBB` palette entry, so off-theme brand accents become addressable run colors | `palette_annotations` -> `theme.palette` (new `_derive_palette_aliases` mints the byte-copied bridge token); `resolve_color` reads `ref` verbatim (ZERO resolver change); new L0 alias check `check_palette_alias_targets` (gate-wired `palette_alias_targets_exist`, in `DEFAULT_L0_INVARIANTS`) + `check_membership` syntax/collision gate | M | alias derived from the template's own captured palette entry; model proposes a name, engine copies the captured ref byte-identical |
 | **E2** *(shipped)* | Faked-heading-in-body-style detection | surface body-style runs that are size/color outliers as a `pseudo_heading` fact (`common.typography.detect_pseudo_headings`, docx `capture_pseudo_headings` -> `theme.pseudo_headings`); model adjudicates a new closed `comprehension.promote_appearance` sink (`{pseudo_heading_ref, target_role_id}`) onto a real heading role | `comprehend_input_bundle` facts (`pseudo_headings`, present-only); new `promote_appearance` sink validated fail-closed by `check_promote_appearance` (ref surfaced + target a declared heading role + pair-unique) and derived onto the heading role appearance (`_derive_promote_appearance`); `_merge_appearance` (role-specific size/color, no family gate); EXISTING `check_appearance_targets` re-validates the promoted value shell-backed (no new check) | M | detector is a pure outlier test vs the captured dominant body appearance; model NAMES a surfaced ref + a declared heading role, engine copies the captured size/color; no promotion ⇒ byte-identical |
 | **E3** *(shipped)* | Uniform `appearance_apply_degraded` finding | one stable INFO per (role, axis) whenever a format cannot realize a captured axis - makes parity gaps *measurable*, feeds the learning loop (B4 `generation_history`) and the L2 model | shared apply orchestration (`common/appearance.py`); per-backend `realized_axes` declaration; `Finding`/`QAReport` | **S** | fires on the structural fact that a captured axis was not realized; names only role id + axis; INFO-only, never flips a verdict |
-| **E4** | Universal cover synthesis for `AnchorKind.NONE` | build a cover from resolvable `cover.*` roles through `resolve_role` when no anchor exists; optional closed `cover_layout` enum lets the model authorize/order | `resolve_role` chokepoint; docx/pptx/xlsx cover write paths; QA finding | L | triggers off a structural fact (`kind==NONE`); builds only from inferred+validated roles; no-ops if none resolve |
+| **E4** *(shipped; deterministic-only, `cover_layout` enum deferred)* | Universal cover synthesis for `AnchorKind.NONE` | build a cover from resolvable `cover.*` roles through `resolve_role` when no anchor exists; optional closed `cover_layout` enum lets the model authorize/order | `resolve_role` chokepoint; docx/pptx/xlsx cover write paths; QA finding | L | triggers off a structural fact (`kind==NONE`); builds only from inferred+validated roles; no-ops if none resolve |
 
 ### Vetted and cut (recorded)
 

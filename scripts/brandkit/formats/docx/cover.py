@@ -29,6 +29,7 @@ from brandkit.ir.model import Cover
 from brandkit.qa.model import Finding
 from brandkit.profile import schema
 from brandkit.profile.reconcile import confidence_clears_floor
+from brandkit.profile.resolver import ProfileResolver
 
 
 PLACEHOLDER_TITLE = "{{title}}"
@@ -296,6 +297,15 @@ def compose_cover(
     title behavior (SDT title, then ``{{title}}``/"Insert title" placeholder, then
     append-before-TOC).
 
+    Cluster E4: when extraction recorded the STRUCTURAL FACT that the shell has no
+    cover anchor at all (``anchors.cover.kind == NONE`` - so there is no slot the
+    in-place machinery could ever fill) a minimal cover is SYNTHESIZED from the
+    profile's own RESOLVABLE ``cover.*`` roles through the shared resolver spine
+    (:func:`_synthesize_cover_from_roles`). The path is completely DISJOINT from
+    the anchored reconciliation above and falls through to the unchanged
+    deterministic fill (byte-identical) whenever the fact is absent or no cover
+    role resolves.
+
     Returns the set of cover anchor refs the reconciliation actually CLEARED
     (emptied/re-armed), so the caller can feed ``no_net_structure_loss``.
     """
@@ -319,6 +329,14 @@ def compose_cover(
     comp = _present_comprehension(profile)
     if comp is not None and comp.get("cover_slots"):
         return _compose_cover_comprehended(doc, cover, profile, comp, sink)
+    # E4 synthesis trigger: ONLY the recorded kind==NONE fact opens this branch
+    # (a kind==NONE shell surfaces an empty cover_anchors inventory, so a present
+    # comprehension can have bound no cover_slots and never reaches it). A False
+    # return (no resolvable cover.* role) falls through byte-identically.
+    if anchor_kind_is_none(profile) and _synthesize_cover_from_roles(
+        doc, cover, profile, sink
+    ):
+        return set()
     return _compose_cover_deterministic(doc, cover, profile, sink)
 
 
@@ -578,6 +596,126 @@ def _compose_cover_deterministic(
         extras.remove("subtitle")
     _note_unplaced_cover_extras(sink, extras)
     return set()
+
+
+def anchor_kind_is_none(profile: dict) -> bool:
+    """True iff extraction RECORDED that the shell carries no cover anchor (E4).
+
+    The trigger is the STRUCTURAL FACT ``anchors.cover.kind == AnchorKind.NONE``
+    stamped by :func:`discover_cover` at extract time - never a guess recomputed at
+    generate time. A profile with no ``anchors.cover`` block at all (hand-built
+    profiles, pre-anchor envelopes) is NOT kind==NONE: the fact was never recorded,
+    so the synthesis path stays cold and output is byte-identical to today.
+    """
+    cover_anchor = (profile.get("anchors") or {}).get("cover") or {}
+    return cover_anchor.get("kind") == schema.AnchorKind.NONE.value
+
+
+def _synthesize_cover_from_roles(doc, cover: Cover, profile: dict, sink: list) -> bool:
+    """Cluster E4: build a MINIMAL cover from the profile's RESOLVABLE cover.* roles.
+
+    Fires only from :func:`compose_cover` when ``anchors.cover.kind == NONE`` (the
+    shell exposes no SDT / placeholder-paragraph cover slot the in-place machinery
+    could fill). Each authored slot - title first, then subtitle, the canonical
+    order - is resolved through the SHARED resolver spine
+    (:meth:`ProfileResolver.resolve_role`, the single brand chokepoint): a slot is
+    synthesized ONLY when its role resolves to a style the live shell actually
+    carries (:func:`lookup_style`); a stub/unresolvable role contributes NOTHING
+    (never a fabricated style/font/hex). The synthesized paragraphs are ordinary
+    role-resolved paragraphs moved before the first toc/body child - the same
+    position the deterministic append fallback uses - and are NEVER touched by the
+    anchored-cover machinery: ``_sync_core_properties`` already ran (it rewrites
+    only existing data-bound SDTs) and no SDT/``showingPlcHdr`` state exists on a
+    fresh paragraph, so the D4 clobber class is structurally unreachable here.
+
+    Returns True when at least one slot was synthesized; the INFO
+    ``cover_synthesized`` finding then audits the structural fact + the role ids
+    used (mirroring ``override_applied`` - never brand text). Returns False to
+    fall through to the UNCHANGED deterministic path, so a kind==NONE shell whose
+    cover.* roles do not resolve stays byte-identical to today. An authored title
+    is never dropped: when title content exists but ``cover.title`` does not
+    resolve, synthesis declines entirely (the deterministic fallback still places
+    the title).
+    """
+    title = textutil.runs_to_text(cover.title or []) or str(
+        cover.fields.get("title", "")
+    )
+    subtitle = textutil.runs_to_text(cover.subtitle or []) or str(
+        cover.fields.get("subtitle", "")
+    )
+    resolver = ProfileResolver(profile)
+    slots: list[tuple[str, str, object]] = []
+    for role_id, content in (("cover.title", title), ("cover.subtitle", subtitle)):
+        if not content:
+            continue
+        op = resolver.resolve_role(role_id, fallback=None)
+        style = lookup_style(doc, op.resolver) if op.resolver else None
+        if style is not None:
+            slots.append((role_id, content, style))
+    if not slots:
+        return False  # nothing resolves: byte-identical fall-through
+    if title and slots[0][0] != "cover.title":
+        return False  # never place a subtitle while the authored title would drop
+    paras = []
+    for _role_id, content, style in slots:
+        para = doc.add_paragraph(content)
+        para.style = style
+        paras.append(para)
+    _move_paras_before_first_toc_or_body(doc, paras)
+    placed = [role_id for role_id, _content, _style in slots]
+    placed_slot_names = {role_id.split(".", 1)[1] for role_id in placed}
+    extras = [e for e in _unplaced_cover_extras(cover) if e not in placed_slot_names]
+    if extras:
+        sink.append(
+            Finding(
+                "cover_degraded",
+                schema.Severity.INFO.value,
+                "synthesized cover placed only the resolvable cover role(s); "
+                f"authored cover slot(s) not placed: {', '.join(extras)}",
+            )
+        )
+    sink.append(
+        Finding(
+            "cover_synthesized",
+            schema.Severity.INFO.value,
+            "no cover anchor in shell (anchors.cover.kind=NONE); cover "
+            f"synthesized from resolved role(s): {', '.join(placed)}",
+        )
+    )
+    return True
+
+
+def _move_paras_before_first_toc_or_body(doc, paras: list) -> None:
+    """Move freshly appended paragraphs - keeping their order - before the first
+    toc/body child.
+
+    The group form of :func:`_move_before_first_toc_or_body` (which is kept
+    untouched for the existing single-title paths): the whole synthesized group is
+    excluded when picking the move target, so the title/subtitle land on the cover
+    in authored order even if an already-moved sibling were itself classified as a
+    body child. No toc/body child at all leaves the paragraphs appended (same
+    last-resort as the single-paragraph helper).
+    """
+    if not paras:
+        return
+    body = doc.element.body
+    own = {p._p for p in paras}
+    children = list(body)
+    target = None
+    for c in classify_body_children(doc):
+        if c["index"] >= len(children):
+            continue
+        el = children[c["index"]]
+        if el in own:
+            continue
+        if c["region"] in ("toc", "body"):
+            target = el
+            break
+    if target is None:
+        return
+    for p in paras:
+        body.remove(p._p)
+        target.addprevious(p._p)
 
 
 def _fill_cover_title_deterministic(doc, profile: dict, title: str, sink: list) -> None:

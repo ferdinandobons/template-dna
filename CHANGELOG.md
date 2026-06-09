@@ -6,6 +6,51 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **Universal cover synthesis for `AnchorKind.NONE` (Cluster E4).** A template whose
+  cover-anchor detection recorded the structural fact `anchors.cover.kind == NONE` (no SDT
+  title slot, no cover-layout placeholder, no anchorable cover structure) previously hit a
+  dead-end: the in-place cover machinery had nothing to fill, so the authored title/subtitle
+  was placed only by the docx last-resort append (title alone, subtitle lost) and dropped
+  entirely on the pptx reconcile path. E4 closes it: when (and ONLY when) the profile
+  records `kind == NONE`, the generator BUILDS a minimal cover from the profile's own
+  RESOLVABLE `cover.*` roles through `resolve_role` (the single brand chokepoint) - never
+  from literals - and no-ops byte-identically when nothing resolves.
+  - **DOCX:** a new synthesis branch in `compose_cover` (completely DISJOINT from the
+    anchored reconciliation): each authored slot (title, then subtitle - the canonical order)
+    is resolved via `ProfileResolver.resolve_role`; a slot is synthesized only when its role
+    resolves to a style the live shell actually carries, as an ordinary role-styled paragraph
+    moved before the first toc/body child (the same position the append fallback used). A
+    stub/unresolvable role contributes nothing; an authored title is NEVER dropped (title
+    content + unresolvable `cover.title` declines synthesis entirely, falling through to the
+    unchanged deterministic fill). The synthesized paragraphs are never touched by
+    `_sync_core_properties` / the SDT `showingPlcHdr` machinery (existing-anchor-only).
+  - **PPTX:** the reconcile path gains the synthesis step: a `kind == NONE` deck surfaces an
+    empty `cover_anchors` inventory, so the model can bind no `cover_slots` and the cover
+    fill was a guaranteed no-op - the authored cover silently never appeared. Now, when the
+    `cover.title` role still resolves to a real shell layout (e.g. a learned reroute), the
+    cover slide is built on that role-resolved layout via the same run-preserving placeholder
+    fill the deterministic rebuild uses. The deterministic path's bytes are UNCHANGED (it
+    already built the cover on the role-resolved layout); it now records the audit finding
+    when that happened on a `kind == NONE` deck.
+  - **XLSX: N/A by design.** Xlsx cover anchors are named ranges - data geometry with no
+    page/slide cover concept and no dedicated cover writer; generation steers them as
+    ordinary named-range fills, so there is nothing to synthesize (pinned by test).
+  - **Audit:** every synthesized cover records an INFO `cover_synthesized` finding (the
+    `override_applied` mirror) naming the structural fact (`kind=NONE`) and the role ids
+    used - never brand text. Unplaced extra authored fields surface as the existing INFO
+    `cover_degraded` note, never silently lost.
+  - **Authorization decision: deterministic-only (no new comprehension sink).** The ROADMAP's
+    optional closed `cover_layout` enum was evaluated and deferred: the trigger is a recorded
+    structural fact, the slot order is canonical (title, subtitle), and every value comes
+    from already-inferred+validated roles, so there is nothing for the model to name that
+    `resolve_role` does not already gate - and the no-sink design keeps merge/validation
+    surface and the model-facing reference docs byte-identical. If a future template needs
+    model-ordered slots, the enum can land later as an additive opt-in.
+  - **Byte-identity:** every `kind != NONE` profile (and every profile that never recorded
+    the fact, `anchors == {}`) takes the existing paths untouched; a `kind == NONE` profile
+    without a resolvable `cover.*` role or without cover content is byte-identical to
+    before. Frozen anchor, full cover regression suite and the real-render lane stay green;
+    schema stays 1.2.0 (no new keys).
 - **Uniform parity ledger: `appearance_apply_degraded` (Cluster E3).** Whenever a
   resolved op carries a captured appearance axis the format's writer cannot realize,
   the shared apply orchestration now emits ONE stable INFO finding per (role, axis)

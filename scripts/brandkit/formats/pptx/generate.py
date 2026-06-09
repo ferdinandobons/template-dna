@@ -231,19 +231,16 @@ def _generate_deterministic(
     # Cover slide: only emitted when the IR actually carries a cover title and the
     # shell offers a layout with a title placeholder.
     if idoc.cover and idoc.cover.title:
-        cover_slide = prs.slides.add_slide(
-            cover_layout or content_layout or prs.slide_layouts[0]
+        _build_cover_slide(
+            prs, idoc.cover, cover_layout or content_layout or prs.slide_layouts[0]
         )
-        title_ph = cover_slide.shapes.title
-        if title_ph is not None:
-            # Re-assert the cover title placeholder's brand run formatting after the
-            # value write (the pptx peer of the docx/xlsx cover-style re-assertion):
-            # write into the first run keeping its rPr rather than clobbering it.
-            _set_placeholder_text(title_ph, textutil.runs_to_text(idoc.cover.title))
-        if idoc.cover.subtitle:
-            sub = _subtitle_placeholder(cover_slide)
-            if sub is not None:
-                _set_placeholder_text(sub, textutil.runs_to_text(idoc.cover.subtitle))
+        # E4 audit: when extraction recorded NO cover anchor (kind==NONE) yet the
+        # cover.title role still RESOLVED to a real shell layout (the resolver
+        # spine - e.g. a learned reroute), this cover slide was synthesized from
+        # that role, not filled into an anchor: record the structural fact. The
+        # slide build above is byte-identical either way.
+        if _cover_kind_is_none(profile) and cover_layout is not None:
+            sink.append(_cover_synthesized_finding())
 
     _append_content_slides(
         prs, profile, idoc, content_layout, body_ph_idx, sink, resolver
@@ -277,6 +274,24 @@ def _generate_reconciled(
     cleared_anchors = _fill_cover_in_place(
         prs, profile, comp, idoc, cover_layout, content_layout, sink
     )
+
+    # 1b) E4 (universal cover synthesis): a deck whose extraction recorded NO cover
+    # anchor (anchors.cover.kind == NONE) surfaces an EMPTY cover_anchors inventory,
+    # so the model can have bound no cover_slots and step 1 was a guaranteed no-op -
+    # the authored cover would silently never appear. When (and ONLY when) that
+    # structural fact holds AND the cover.title role still RESOLVES to a real shell
+    # layout through the shared resolver spine (e.g. a learned reroute), synthesize
+    # the cover slide from that role. A stub cover.title (every freshly extracted
+    # kind==NONE deck) keeps today's byte-identical no-op.
+    if (
+        _cover_kind_is_none(profile)
+        and not (comp.get("cover_slots") or {})
+        and cover_layout is not None
+        and idoc.cover is not None
+        and idoc.cover.title
+    ):
+        _build_cover_slide(prs, idoc.cover, cover_layout)
+        sink.append(_cover_synthesized_finding())
 
     # 2) CLEAR demo slides only (the destructive floor: a slide is removed only when
     # the model tagged its region demo AND determinism corroborates it is demo - its
@@ -1207,8 +1222,56 @@ def _body_ph_idx(resolver: ProfileResolver) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------
-# Cover-anchor / placeholder helpers (reconcile path)
+# Cover-anchor / placeholder helpers (reconcile path + E4 synthesis)
 # ---------------------------------------------------------------------------
+def _cover_kind_is_none(profile: dict) -> bool:
+    """True iff extraction RECORDED that the deck exposes no cover anchor (E4).
+
+    The trigger is the STRUCTURAL FACT ``anchors.cover.kind == AnchorKind.NONE``
+    stamped at extract time (no layout reads as a cover, so the cover_anchors
+    inventory is empty) - never a guess recomputed at generate time. A profile
+    with no ``anchors.cover`` block at all (hand-built profiles) is NOT
+    kind==NONE, so the synthesis paths stay cold and output is byte-identical.
+    """
+    cover_anchor = (profile.get("anchors") or {}).get("cover") or {}
+    return cover_anchor.get("kind") == schema.AnchorKind.NONE.value
+
+
+def _build_cover_slide(prs, cover, layout):
+    """Add a cover slide on ``layout`` and fill its title/subtitle placeholders.
+
+    The single cover-slide builder shared by the deterministic rebuild and the E4
+    synthesis step (identical operations, so the deterministic path stays
+    byte-identical). The fill writes into the first run keeping its rPr - the
+    pptx peer of the docx/xlsx cover-style re-assertion - so the layout's brand
+    run formatting survives the value write. ``layout`` is always a REAL shell
+    layout (resolved through the resolver spine or a real positional fallback);
+    no placeholder is ever fabricated (a layout without a title/subtitle
+    placeholder simply leaves that slot unfilled).
+    """
+    slide = prs.slides.add_slide(layout)
+    title_ph = slide.shapes.title
+    if title_ph is not None:
+        _set_placeholder_text(title_ph, textutil.runs_to_text(cover.title))
+    if cover.subtitle:
+        sub = _subtitle_placeholder(slide)
+        if sub is not None:
+            _set_placeholder_text(sub, textutil.runs_to_text(cover.subtitle))
+    return slide
+
+
+def _cover_synthesized_finding() -> Finding:
+    """The E4 audit record (mirrors ``override_applied``): an INFO naming the
+    structural fact (kind==NONE) and the role the layout resolved from - never
+    brand text. Emitted ONLY when a cover slide was actually synthesized."""
+    return Finding(
+        "cover_synthesized",
+        schema.Severity.INFO.value,
+        "no cover anchor in shell (anchors.cover.kind=NONE); cover slide "
+        "synthesized on the layout resolved from role cover.title",
+    )
+
+
 def _existing_cover_slide(prs, profile: dict):
     """Return the first slide built on the cover layout, or None.
 
