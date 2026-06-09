@@ -6,7 +6,7 @@
       "name": "brand-docs",
       "source": "./",
       "description": "AI on-brand document generator: turn a company's Word, PowerPoint or Excel template into unlimited on-brand .docx/.pptx/.xlsx. Learn the template once into a reusable Brand Profile, then generate faithful documents - off-brand output impossible by construction. Skills: brand-docx, brand-pptx, brand-xlsx.",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "license": "MIT"
     }
   ]

@@ -4,6 +4,35 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-09
+
+A clean finished checkpoint: the remaining LOW items from the v0.6.0 review are
+closed and dead parameters removed. No behavior change beyond the fixes; profiles
+from earlier versions keep working unchanged.
+
+### Fixed
+
+- The QA gate now verifies a `number_format` role's mask against the SHELL's
+  actually-used formats (the shell-backed peer of the schema's intra-profile
+  check), so a fabricated/hand-edited mask is caught at verify time, never applied.
+- A `table`/`KPI`/`SmartArt` block rendered against a profile with no matching role
+  no longer falls back to the default style SILENTLY: it surfaces an INFO
+  `style_fallback` so the missing brand style is visible in QA (the content still
+  renders).
+
+### Changed
+
+- Removed dead parameters (no behavior change): `run_qa`'s never-read `mode`, the
+  docx `_write_block` `profile` arg, and the xlsx `_resolve_named_target` `findings`
+  arg.
+
+### Tests
+
+- Closed the review's remaining coverage gaps: strict-mode promotion of
+  `visual.ocr_degraded` to an error, `_ocr_png` timeout/OSError degradation, the
+  Quick-Look-absent render degrade, the QA-gate fabricated-mask rejection, and the
+  `style_fallback` path.
+
 ## [0.6.0] - 2026-06-09
 
 Visual QA works by default, a whole-project code + quality review (multi-agent,
@@ -283,6 +312,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.6.1]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.6.0
 [0.5.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.5.0
 [0.4.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.4.0
