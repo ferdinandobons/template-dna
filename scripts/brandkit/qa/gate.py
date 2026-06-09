@@ -95,6 +95,13 @@ def run_qa(
     # inventories. No-ops when comprehension is absent (model-free CI path,
     # pptx/xlsx), so it is always safe to run unconditionally here.
     findings = findings + checks_deterministic.check_comprehension_targets(profile)
+    # Fail-closed LEARNED-override-target membership (sibling of comprehension
+    # targets, Cluster B): every reroute target / number_format mask / demo-clear
+    # value a learned lesson re-points to must be proven by this shell / captured for
+    # this template. Rejects-never-skips on an empty inventory. No-ops when overrides
+    # are absent (status != present), so the model-free CI path and pre-B3 profiles
+    # are unaffected.
+    findings = findings + checks_deterministic.check_override_targets(shell, profile)
     # Fail-closed COLOR-token membership (sibling of comprehension targets): every
     # palette color token the comprehension/IDoc references must be a verbatim key
     # of theme.palette. No-ops when comprehension is absent, so the model-free CI

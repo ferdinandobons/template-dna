@@ -104,6 +104,18 @@ the home for captured typography. Three additive layers:
 
 ## 2. Profile learns from generation QA findings (a feedback loop)
 
+> **Status: B1-B3 SHIPPED (deterministic core); Phase B (model-proposed, B4) still
+> pending.** Implemented: every `generate` persists `generation_report.json`
+> (verdict + findings verbatim + shell/content/output sha256) next to the output;
+> cross-run `regression.recurred`/`regression.reintroduced` findings (advisory,
+> keyed on `(check, location)`, same-shell only); and a deterministic `learn` verb
+> that distills unambiguous recurring findings into the shell-frozen
+> `rules.overrides` block (closed vocab: reroute_role / number_format /
+> register_demo_clear) through a single all-or-nothing fail-closed sink, consumed
+> by the resolver only as a LAST-RESORT on a stub and re-proven at verify by
+> `check_override_targets`. Lessons stay ADVISORY until `learn --accept`. See
+> CONVENTIONS §14. The design below documents the full feature.
+
 ### Problem
 If extracting a profile leads to repeatable problems at generation time (a role
 that resolves to a weak/missing style, a fragment that degrades, a rejected
@@ -335,8 +347,14 @@ with no new model code.
 
 ### Cluster B - Learn-from-errors (new capability; refines section 2)
 
-Nothing here exists today: `generation_report` is absent and `rules.overrides` is
-reserved (`schema.py`) with no reader/writer. Strict chain B1 -> B2 -> B3 -> B4.
+> **Status: B1+B2+B3 SHIPPED** (see the section-2 banner; `qa/report.py` +
+> `profile/overrides.py` + the `learn` verb + `check_override_targets`).
+> **B4 (model-proposed corrections) still pending** - it reuses the same
+> `merge_overrides` sink and must land after B3 (it has).
+
+When this was written nothing here existed: `generation_report` was absent and
+`rules.overrides` was reserved (`schema.py`) with no reader/writer. Strict chain
+B1 -> B2 -> B3 -> B4.
 
 | # | Item | Value | Seam reused | Feas | Why universal |
 |---|---|---|---|---|---|

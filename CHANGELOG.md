@@ -24,6 +24,31 @@ All notable changes to BrandDocs are documented in this file.
     the first dark/light pairs vs clrScheme order) is mapped correctly so a default
     `theme=1` text color is captured as `dk1`, not `lt1`.
   - **Still docx-only:** caption-index regeneration (the `SEQ` field machinery).
+- **Learn-from-errors deterministic core (the profile learns from its own QA
+  findings).** Three additive layers, format-uniform across docx/pptx/xlsx:
+  - **Persisted `generation_report.json`** (new `qa/report.py`): every `generate`
+    writes a side artifact next to the output (the QA verdict + findings verbatim +
+    shell/content/output sha256 + a timestamp). Degrade-to-no-op (a failed write can
+    never flip a verdict), generate-only, and the timestamp lives only in the JSON -
+    generated document bytes stay identical across runs.
+  - **Cross-run regression findings**: a new run's findings are diffed against prior
+    SAME-shell reports and `regression.recurred` / `regression.reintroduced` are
+    folded into the QA report - keyed strictly on `(check, location)`, never the
+    brand-bearing message; advisory (INFO/WARNING), never flips a verdict.
+  - **A `learn` verb + shell-bound `rules.overrides`** (new `profile/overrides.py`):
+    deterministic distillation of unambiguous recurring findings into a closed-vocab
+    lesson (`reroute_role` to a healthy same-family sibling, `number_format` swap to
+    a shell-backed mask, `register_demo_clear` of a captured demo string), written
+    through a single all-or-nothing `merge_overrides` sink (fail-closed membership +
+    an acyclic reroute-graph proof). The resolver consumes a lesson only as a
+    LAST-RESORT on a genuine stub (never on a healthy resolve), pinned to the
+    requested role id; `check_override_targets` re-proves every lesson against the
+    live shell at verify (ERROR on a missing target, reject-on-empty). Lessons are
+    frozen to the shell sha (a re-extract resets them) and stay ADVISORY until an
+    explicit `learn --accept` - with no accepted lesson, generation is
+    byte-identical to today. QA producers now carry the structured `location`
+    pointer (role id / demo marker) so lessons distill from real run history.
+    The model-proposed phase (B4) is a later increment.
 
 ## [0.7.0] - 2026-06-09
 

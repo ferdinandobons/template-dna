@@ -1191,6 +1191,7 @@ def _apply_style(
                 schema.Severity.ERROR.value,
                 f"{label}role {op.role_id!r} resolves to style {target!r} "
                 "which is not in the shell",
+                location=op.role_id,
             )
         )
     elif expect_style:
@@ -1200,6 +1201,7 @@ def _apply_style(
                 schema.Severity.INFO.value,
                 f"{label}block rendered with the default style: this profile has no "
                 f"{label.strip() or 'matching'} role to brand it",
+                location=op.role_id,
             )
         )
     # Apply the role's captured typography (font/size/color) on top of the style.

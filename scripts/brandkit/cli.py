@@ -23,6 +23,63 @@ from brandkit.profile import schema, store
 from brandkit.qa.gate import run_qa
 
 
+def _content_hash(canonical: dict) -> str:
+    """Hash a canonical input dict deterministically.
+
+    ``sort_keys`` + ``ensure_ascii=False`` make logically-equal inputs (differing
+    only in author-side key order / whitespace) hash identically -- the stable
+    "same input" key the cross-run report (Cluster B) reads.
+    """
+    return store.sha256_bytes(
+        json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    )
+
+
+def _grid_to_dict(grid) -> dict:
+    """Canonical dict form of a parsed ``GridDocument`` (peer of ``idoc.to_dict()``).
+
+    The grid model carries no ``to_dict``; this projects its load-bearing fields
+    into a stable shape for the content hash. Empty containers are omitted so the
+    hash matches what an equivalent minimal input would produce.
+    """
+    out: dict = {"cells": dict(grid.cells), "regions": dict(grid.regions)}
+    if grid.formats:
+        out["formats"] = dict(grid.formats)
+    if grid.charts:
+        out["charts"] = [dict(c) for c in grid.charts]
+    return out
+
+
+def _discover_learn_reports(profile: dict, shell_path) -> list[dict]:
+    """Discover this profile's SAME-shell generation_report.json history for ``learn``.
+
+    The deterministic ``learn`` verb distils a lesson from the cross-run report
+    history B1/B2 persist. Each ``generate`` writes its report into the
+    ``<output>.visual`` dir NEXT TO its output (an operator-chosen path), so there is
+    no single registry of past outputs; we walk the current working directory tree
+    for every ``*.visual/generation_report.json`` and keep ONLY those whose
+    ``shell_sha256`` matches THIS profile's live shell. The sha partition both scopes
+    the history to this profile (a different profile has a different shell sha) and
+    enforces SHELL-FROZEN (a re-extract re-stamps the sha, starting a fresh history).
+
+    A pure side artifact: any IO error / malformed report degrades to fewer (or zero)
+    priors, never an exception - mirroring ``report.discover_prior_reports``.
+    """
+    from brandkit.qa import report as vreport
+
+    shell_sha256 = vreport.report_shell_sha256(profile, shell_path)
+    if not shell_sha256:
+        return []
+    try:
+        # Only the candidate set is ours (a cwd-wide walk); the per-candidate
+        # read/filter/order pipeline is the SAME one discover_prior_reports uses
+        # (report.load_same_shell_reports), so the two read paths can never drift.
+        candidates = sorted(Path.cwd().rglob(f"*.visual/{vreport.REPORT_FILENAME}"))
+        return vreport.load_same_shell_reports(candidates, shell_sha256=shell_sha256)
+    except Exception:
+        return []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="brand-docs")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -58,6 +115,21 @@ def main(argv: list[str] | None = None) -> int:
         "--input", required=True, help="path to the model-authored comprehension.json"
     )
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
+
+    # learn: deterministically distil recurring QA findings (the cross-run
+    # generation_report.json history, B1/B2) into a brand-safe overrides lesson and
+    # cache it via the single merge_overrides sink. ADVISORY by default: the lesson is
+    # written but kept OUT of the live resolver (status forced 'absent', zero new
+    # resolver branches, byte-identical) until an explicit --accept promotes it to
+    # 'present', so a single noisy run can never mint a permanent live lesson.
+    p = sub.add_parser("learn")
+    p.add_argument("--name", required=True)
+    p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
+    p.add_argument(
+        "--accept",
+        action="store_true",
+        help="promote the distilled lesson to a LIVE override the resolver consumes",
+    )
 
     p = sub.add_parser("list")
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
@@ -127,28 +199,39 @@ def main(argv: list[str] | None = None) -> int:
         loaded = store.load_profile(args.name, args.scope)
         data = json.loads(Path(args.input).read_text(encoding="utf-8"))
         gen_findings: list = []
+        # The content hash is taken from the CANONICAL parsed input (``to_dict()``),
+        # never the raw author bytes: cosmetic key-order/whitespace changes hash
+        # equal, which is what B2 keys "same input" on. ``None`` when the parse
+        # produced no canonical form (never blocks generation).
+        content_hash: str | None = None
         try:
             if loaded.kind == "docx":
+                idoc = parse_idoc(data)
+                content_hash = _content_hash(idoc.to_dict())
                 out = docx_generate.generate(
                     loaded.profile,
                     loaded.shell_path,
-                    parse_idoc(data),
+                    idoc,
                     args.output,
                     findings=gen_findings,
                 )
             elif loaded.kind == "pptx":
+                idoc = parse_idoc(data)
+                content_hash = _content_hash(idoc.to_dict())
                 out = pptx_generate.generate(
                     loaded.profile,
                     loaded.shell_path,
-                    parse_idoc(data),
+                    idoc,
                     args.output,
                     findings=gen_findings,
                 )
             elif loaded.kind == "xlsx":
+                grid = parse_grid(data)
+                content_hash = _content_hash(_grid_to_dict(grid))
                 out = xlsx_generate.generate(
                     loaded.profile,
                     loaded.shell_path,
-                    parse_grid(data),
+                    grid,
                     args.output,
                     findings=gen_findings,
                 )
@@ -157,9 +240,24 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"ERROR generate: {exc}")
             return 1
+        from brandkit.qa import report as vreport
         from brandkit.qa import visual as vqa
 
         visual_dir = vqa.default_out_dir(args.output)
+        # B2: discover prior SAME-SHELL reports BEFORE writing this run's report,
+        # so the cross-run regression findings can be computed and folded in. This
+        # discovery (sha derivation included) is a pure SIDE artifact: it degrades
+        # to no priors on any error so it can NEVER raise into the gate.
+        try:
+            prior_reports = vreport.discover_prior_reports(
+                visual_dir,
+                shell_sha256=vreport.report_shell_sha256(
+                    loaded.profile, loaded.shell_path
+                ),
+                exclude=visual_dir / vreport.REPORT_FILENAME,
+            )
+        except Exception:
+            prior_reports = []
         report = run_qa(
             out,
             loaded.profile,
@@ -168,6 +266,32 @@ def main(argv: list[str] | None = None) -> int:
             extra_findings=gen_findings,
             out_dir=visual_dir,
         )
+        # B2: fold cross-run regression findings into THIS run's report so they
+        # self-record into the persisted generation_report.json (making recurrence
+        # visible to the next run). They are advisory INFO/WARNING -- never ERROR,
+        # never in DEFAULT_L0_INVARIANTS -- so they can lift a clean verdict to
+        # passed_with_warnings but can NEVER flip it to failed (report.passed, the
+        # CLI return code, keys only on the absence of ERRORs and is unaffected).
+        try:
+            regression_findings = vreport.compute_regression_findings(
+                loaded.profile, report, prior_reports
+            )
+        except Exception:
+            regression_findings = []
+        if regression_findings:
+            report.findings.extend(regression_findings)
+            if report.verdict != schema.VerificationStatus.FAILED.value:
+                report.verdict = schema.VerificationStatus.PASSED_WITH_WARNINGS.value
+        # Persist the run as a durable side artifact (degrade-to-no-op on any
+        # error; the timestamp lives only in this JSON, never in the doc bytes).
+        report_path = vreport.build_generation_report(
+            profile=loaded.profile,
+            document=out,
+            report=report,
+            shell_path=loaded.shell_path,
+            out_dir=visual_dir,
+            content_hash=content_hash,
+        )
         for finding in report.findings:
             print(f"{finding.severity} {finding.check}: {finding.message}")
         # Surface the manifest path on stdout so the orchestrator can read it
@@ -175,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest_findings = [f for f in report.findings if f.check == "visual.manifest"]
         if manifest_findings:
             print(f"visual manifest: {manifest_findings[0].location}")
+        if report_path is not None:
+            print(f"generation report: {report_path}")
         print(f"generated {out}")
         return 0 if report.passed else 1
     if args.cmd == "comprehend-input":
@@ -210,6 +336,45 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"comprehended {args.name}: {n_slots} cover slot(s), "
             f"{n_idx} index convention(s), {n_frag} fragment(s) [present]"
+        )
+        return 0
+    if args.cmd == "learn":
+        from brandkit.profile import overrides as overrides_mod
+        from brandkit.qa import report as vreport
+
+        loaded = store.load_profile(args.name, args.scope)
+        # Discover the SAME-shell generation_report.json history this profile's prior
+        # generate runs persisted (B1/B2). Mirrors the generate verb's discovery: it
+        # walks the side-artifact dirs next to the profile's outputs. The discovery
+        # is a pure side artifact (degrade-to-no-priors on any error), so a missing
+        # history simply distils nothing rather than failing.
+        reports = _discover_learn_reports(loaded.profile, loaded.shell_path)
+        result = overrides_mod.learn(loaded.profile, reports)
+        # ADVISORY accept gate (mirrors verify --accept): learn writes the lesson via
+        # the single merge_overrides sink, but it stays OUT of the live resolver
+        # (status forced 'absent' so resolve_role takes zero new branches and bytes
+        # stay byte-identical) until --accept promotes it to 'present'. A single noisy
+        # run therefore cannot mint a permanent LIVE lesson; the operator must opt in.
+        block = (loaded.profile.get("rules") or {}).get("overrides") or {}
+        if result.ok and not args.accept:
+            block["status"] = schema.ComprehensionStatus.ABSENT.value
+        store.write_profile_json(loaded.directory, loaded.profile)
+        if not result.ok:
+            if result.problems:
+                print(f"learn REJECTED ({len(result.problems)} problem(s)):")
+                for problem in result.problems:
+                    print(f"  {problem}")
+                return 1
+            # Nothing crossed the recurrence threshold / bound to a brand-safe target.
+            print(f"learn {args.name}: no recurring finding distilled (0 override(s))")
+            return 0
+        state = (
+            "present (LIVE)"
+            if args.accept
+            else "absent (advisory; --accept to go live)"
+        )
+        print(
+            f"learned {args.name}: {result.distilled} override(s) distilled [{state}]"
         )
         return 0
     if args.cmd == "list":

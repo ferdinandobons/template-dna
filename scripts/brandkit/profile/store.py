@@ -210,6 +210,41 @@ def comprehension_is_present(profile: dict) -> bool:
     return bool(recorded and live and recorded == live)
 
 
+def overrides_are_present(profile: dict) -> bool:
+    """Return True iff the profile carries *valid, current, non-empty* overrides.
+
+    The learned-overrides block (``rules.overrides``, Cluster B) is sha-bound to the
+    shell IN CODE exactly like the comprehension cache: it counts as present (and the
+    resolver is allowed to consume it) only when its ``status`` is ``present`` AND its
+    ``source_shell_sha256`` equals the live ``provenance.shell.sha256`` AND at least
+    one of its closed-kind containers (``reroute_roles`` / ``number_format_swaps`` /
+    ``demo_clears``) is non-empty.
+
+    A drifted shell (re-extract re-stamps ``provenance.shell.sha256`` at
+    :func:`save_profile`) leaves a stale lesson whose recorded sha no longer matches,
+    so the resolver correctly ignores it and reverts to today's deterministic,
+    byte-identical path until ``learn`` is re-run. This mirrors
+    :func:`comprehension_is_present` one-for-one.
+    """
+    rules = profile.get("rules")
+    if not isinstance(rules, dict):
+        return False
+    overrides = rules.get("overrides")
+    if not isinstance(overrides, dict):
+        return False
+    if overrides.get("status") != "present":
+        return False
+    recorded = overrides.get("source_shell_sha256")
+    live = ((profile.get("provenance") or {}).get("shell") or {}).get("sha256")
+    if not (recorded and live and recorded == live):
+        return False
+    return bool(
+        overrides.get("reroute_roles")
+        or overrides.get("number_format_swaps")
+        or overrides.get("demo_clears")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------

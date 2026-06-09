@@ -172,6 +172,7 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
                         "resolver_targets_exist",
                         schema.Severity.ERROR.value,
                         f"role {rid!r} target style {(sid or sname)!r} not found in shell",
+                        location=rid,
                     )
                 )
         elif kind == schema.Kind.PPTX.value:
@@ -188,6 +189,7 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
                         "resolver_targets_exist",
                         schema.Severity.ERROR.value,
                         f"role {rid!r} layout {layout!r} not found in shell (have {sorted(layout_names)})",
+                        location=rid,
                     )
                 )
         elif kind == schema.Kind.XLSX.value:
@@ -204,6 +206,7 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
                         "resolver_targets_exist",
                         schema.Severity.ERROR.value,
                         f"role {rid!r} named range {name!r} not found in shell (have {sorted(defined)})",
+                        location=rid,
                     )
                 )
             # number_format roles must resolve to a mask the shell ACTUALLY uses
@@ -223,6 +226,7 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
                         schema.Severity.ERROR.value,
                         f"role {rid!r} number format {mask!r} not among the shell's "
                         "used formats",
+                        location=rid,
                     )
                 )
     except Exception as exc:  # opening the shell must never crash the gate
@@ -728,6 +732,179 @@ def check_comprehension_targets(profile: dict) -> list[Finding]:
     return findings
 
 
+def _role_resolver_target_in_shell(kind, resolver: dict, present: set) -> bool:
+    """True iff one role's resolver target is proven by the shell's ``present`` set.
+
+    The membership predicate of ``check_override_targets``' reroute branch. It
+    MIRRORS ``check_resolver_targets``' per-kind membership arms but is deliberately
+    STRICTER, so it is not literally shared: ``check_resolver_targets`` SKIPS a role
+    whose resolver is incomplete (a missing layout/name is another validator's
+    problem), while a reroute target with the same incomplete resolver must be
+    REJECTED here - a lesson may only re-point at a concrete, shell-backed op, never
+    a stub. ``present`` is the kind-appropriate inventory (style keys / layout names
+    / defined names+masks).
+    """
+    rtype = resolver.get("type")
+    if kind == schema.Kind.DOCX.value:
+        if rtype not in (schema.ResolverType.NAMED_STYLE.value, None):
+            return False
+        sid = resolver.get("style_id")
+        sname = resolver.get("style_name")
+        if not sid and not sname:
+            return False
+        return bool((sid and sid in present) or (sname and sname in present))
+    if kind == schema.Kind.PPTX.value:
+        if rtype != schema.ResolverType.PLACEHOLDER.value:
+            return False
+        layout = resolver.get("layout")
+        return layout is not None and layout in present
+    if kind == schema.Kind.XLSX.value:
+        if rtype == schema.ResolverType.NAMED_RANGE.value:
+            name = resolver.get("name")
+            return name is not None and name in present
+        if rtype == schema.ResolverType.NUMBER_FORMAT.value:
+            mask = resolver.get("number_format")
+            return mask is not None and mask in present
+        return False
+    return False
+
+
+def check_override_targets(shell, profile: dict) -> list[Finding]:
+    """FAIL-CLOSED membership of every LEARNED override target against the shell.
+
+    The override peer of :func:`check_resolver_targets`, with the **reject-on-empty**
+    discipline of :func:`check_comprehension_targets` (NOT the namespace-guarded
+    skip-on-empty of ``_validate_resolver_consistency``): when a lesson is present,
+    every re-point target must be proven by THIS shell, and a target whose inventory
+    is empty/absent is itself an ERROR (this is the SOLE gate for override targets, so
+    it must reject, never skip). Emits ERROR ``override_targets_exist`` when:
+
+      - a ``reroute_role`` ``to`` is not a concrete declared role key (``_index`` is
+        the order array, not a role), or that role's own resolver target is not
+        shell-proven (so a reroute can only ever land on a real, shell-backed op);
+      - a ``number_format`` swap mask is not among the shell's used masks
+        (``surface.xlsx.number_formats`` via :func:`_xlsx_number_format_masks`);
+      - a ``demo_clear`` value was not captured for this template
+        (:func:`captured_template_texts`).
+
+    No-ops when overrides are absent (``status != present``), keeping the model-free
+    CI path and a pre-B3 profile green - exactly like ``check_comprehension_targets``.
+    ``shell`` may be None at verify time only for the reroute/mask branches that need
+    to open the package; the demo-clear branch reads the profile's captured set, so it
+    fails closed even without a shell.
+    """
+    overrides = schema.overrides_block(profile)
+    if overrides.get("status") != schema.ComprehensionStatus.PRESENT.value:
+        return []
+    kind = profile.get("kind")
+    roles = profile.get("roles") or {}
+    role_keys = {r for r in roles if r != "_index"}
+    findings: list[Finding] = []
+
+    reroutes = overrides.get("reroute_roles") or {}
+    swaps = overrides.get("number_format_swaps") or {}
+    clears = overrides.get("demo_clears") or []
+
+    # Pure-profile membership (no shell needed, so it fails closed even at verify time
+    # with shell=None or a broken shell): a reroute target must be a CONCRETE declared
+    # role (``_index`` is the order array, not a role). Checked unconditionally; the
+    # shell-backed resolver proof below only runs the resolver gate on the survivors.
+    shell_backed_reroutes: dict[str, str] = {}
+    for requested, target in reroutes.items():
+        if target not in role_keys:
+            findings.append(
+                Finding(
+                    "override_targets_exist",
+                    schema.Severity.ERROR.value,
+                    f"reroute target {target!r} (for role {requested!r}) is not a "
+                    f"declared role (have {sorted(role_keys)})",
+                )
+            )
+        else:
+            shell_backed_reroutes[requested] = target
+
+    # demo-clear values are membership-checked against the profile's OWN captured demo
+    # set (no shell open needed) FIRST, so a later shell-open failure can never suppress
+    # this fail-closed check. reject-on-empty: a clear value absent from the captured
+    # set (including an empty set) is an ERROR.
+    if clears:
+        captured = set(captured_template_texts(profile))
+        for value in clears:
+            if value not in captured:
+                findings.append(
+                    Finding(
+                        "override_targets_exist",
+                        schema.Severity.ERROR.value,
+                        f"demo_clear value {value!r} was not captured for this template",
+                    )
+                )
+
+    # The resolver-target proof and the mask membership need the shell inventory; open
+    # it ONCE. reject-on-empty (NOT skip-on-empty): when a lesson re-points to a target
+    # the shell can't prove - including an EMPTY inventory - that is itself an ERROR.
+    if (shell_backed_reroutes or swaps) and shell is not None:
+        try:
+            if kind == schema.Kind.DOCX.value:
+                present = _docx_style_keys(shell)
+            elif kind == schema.Kind.PPTX.value:
+                present = _pptx_layout_names(shell)
+            elif kind == schema.Kind.XLSX.value:
+                present = _xlsx_defined_names(shell)
+            else:
+                present = set()
+            masks = (
+                _xlsx_number_format_masks(shell)
+                if kind == schema.Kind.XLSX.value
+                else set()
+            )
+        except Exception as exc:  # opening the shell must never crash the gate
+            findings.append(
+                Finding(
+                    "override_targets_exist",
+                    schema.Severity.WARNING.value,
+                    f"could not verify override targets against shell: {exc}",
+                )
+            )
+            return findings
+
+        for requested, target in shell_backed_reroutes.items():
+            target_resolver = (roles.get(target) or {}).get("resolver") or {}
+            target_present = (
+                masks
+                if (
+                    kind == schema.Kind.XLSX.value
+                    and target_resolver.get("type")
+                    == schema.ResolverType.NUMBER_FORMAT.value
+                )
+                else present
+            )
+            if not _role_resolver_target_in_shell(
+                kind, target_resolver, target_present
+            ):
+                findings.append(
+                    Finding(
+                        "override_targets_exist",
+                        schema.Severity.ERROR.value,
+                        f"reroute target {target!r} (for role {requested!r}) does not "
+                        "resolve to a shell-backed op",
+                    )
+                )
+
+        for rid, mask in swaps.items():
+            # reject-on-empty: a swap into an empty mask inventory is itself an ERROR.
+            if mask not in masks:
+                findings.append(
+                    Finding(
+                        "override_targets_exist",
+                        schema.Severity.ERROR.value,
+                        f"number_format swap mask {mask!r} (for role {rid!r}) is not "
+                        f"among the shell's used formats (have {sorted(masks)})",
+                    )
+                )
+
+    return findings
+
+
 def check_color_token_targets(profile: dict) -> list[Finding]:
     """FAIL-CLOSED membership of every COLOR token against ``theme.palette``.
 
@@ -841,6 +1018,7 @@ def check_residual_template_text(text: str, profile: dict) -> list[Finding]:
                     "no_residual_template_text",
                     schema.Severity.ERROR.value,
                     f"residual template text: {marker!r}",
+                    location=marker,
                 )
             )
     return findings

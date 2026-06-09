@@ -15,7 +15,7 @@ is the bug.
 
 ---
 
-## 1. The four verbs
+## 1. The five verbs
 
 Every skill (`brand-docx`, `brand-pptx`, `brand-xlsx`) implements the same contract:
 
@@ -25,6 +25,7 @@ Every skill (`brand-docx`, `brand-pptx`, `brand-xlsx`) implements the same contr
 | **comprehend** *(optional, model-driven)* | a saved profile + a model-authored `comprehension.json` | the profile with a validated, cached `comprehension` block |
 | **verify** | a saved Brand Profile | QA findings + a verdict (the role map lives in `PROFILE.md`) |
 | **generate** | content (free text or an IntermediateDocument) + a profile | a new on-brand document |
+| **learn** *(optional, deterministic)* | a saved profile + its cross-run `generation_report.json` history | the profile with a distilled, ADVISORY `rules.overrides` lesson (live only with `--accept`; see §14) |
 
 `verify` reports deterministic QA findings and a verdict; it does **not** render a
 proof image, and the role-mapping table is written to `PROFILE.md` at extract time
@@ -565,7 +566,58 @@ template-derived (no hardcoded colors/names/language). Applied on all three form
 
 ---
 
-## 14. Licensing
+## 14. Learn-from-errors (`generation_report.json` + `rules.overrides` + `learn`)
+
+The deterministic feedback loop (Cluster B core; the model-proposed phase is a later
+increment). Three additive layers, format-uniform, schema stays **1.2.0**:
+
+### The persisted run report (`qa/report.py`)
+Every `generate` writes `generation_report.json` into the same `<output>.visual`
+side-artifact dir as the visual manifest: the QA `verdict` + `findings` **verbatim**
+(never reordered/deduped) + `shell_sha256` / `content_sha256` (canonical `to_dict()`
+JSON of the parsed input) / `output_sha256` + `generated_at` (the ONLY volatile
+field, read by no generator path - document bytes stay identical across runs).
+Degrade-to-no-op: a failed write never raises into the gate and never flips a
+verdict. GENERATE-only (`verify` writes no report - a hash-less row would pollute
+the history). QA producers carry the structured `location` pointer (a role id for
+`resolver_targets_exist`/`style_fallback`, the matched marker for
+`no_residual_template_text`) - the binding pointer the loop keys on, never the
+brand-bearing `message`.
+
+### Cross-run regression findings
+Before writing the new report, prior SAME-shell reports are discovered (partitioned
+strictly by `shell_sha256` - a re-extract starts a fresh history) and the run's
+findings are diffed against them on the `(check, location)` key:
+`regression.recurred` (INFO, carries the `recurred_runs` count the `learn`
+threshold gates on) and `regression.reintroduced` (WARNING - it came back after a
+clean run). ADVISORY only: neither is in `DEFAULT_L0_INVARIANTS`, neither can flip
+a verdict or the CLI return code.
+
+### The `learn` verb + the `rules.overrides` block (`profile/overrides.py`)
+`learn` distills UNAMBIGUOUS findings (`LEARNABLE_CHECKS`) that recurred across
+`>= 2` same-shell runs into a closed-vocab lesson - `reroute_role` (a stub role to
+a healthy SAME-family sibling), `number_format` (swap to a mask in
+`surface.<kind>.number_formats`), `register_demo_clear` (a captured demo string) -
+and routes it through the SINGLE `merge_overrides` sink: shape validation +
+fail-closed membership (reject-never-skip, a pointer into an empty inventory is an
+error) + an acyclic reroute-graph proof, ALL-OR-NOTHING (one unbound pointer
+rejects the whole proposal). The block mirrors the comprehension freeze contract:
+`status` / `source_shell_sha256` (== `provenance.shell.sha256`, reset by
+re-extract) / `confidence` / flat per-entry `provenance`.
+
+Consume + guarantees: the resolver applies a lesson only as a **LAST-RESORT on a
+genuine stub** (never on a healthy typed resolve), single-hop with the role id
+pinned to the REQUESTED role (the heading body-default exclusion still keys on the
+original); a reroute reuses the target role's existing shell-proven resolver
+verbatim through the legal-type gate, so an override can never inject a
+style/font/hex. `check_override_targets` (gate-wired, `override_targets_exist`)
+re-proves every lesson against the live shell at verify. Lessons are ADVISORY
+until an explicit `learn --accept` (mirroring `verify --accept`); with no accepted
+lesson the resolver takes zero new branches and generation is **byte-identical**.
+
+---
+
+## 15. Licensing
 
 - brand-docs original code: **MIT** (every engine file carries an
   `SPDX-License-Identifier: MIT` header).

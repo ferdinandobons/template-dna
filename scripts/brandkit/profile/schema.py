@@ -50,6 +50,11 @@ SUPPORTED_MAJOR: int = 1
 # model-facing contract can evolve without re-versioning the whole envelope.
 COMPREHENSION_SCHEMA_VERSION: str = "comprehension-1"
 
+# The learned-overrides sub-block (``rules.overrides``, Cluster B) carries its own
+# independent schema tag for the same reason. Additive: the slot was reserved at
+# SCHEMA_VERSION 1.2.0; stamping a shaped ``absent`` block does NOT bump the major.
+OVERRIDES_SCHEMA_VERSION: str = "overrides-1"
+
 
 # ---------------------------------------------------------------------------
 # Frozen enums
@@ -224,6 +229,31 @@ class FragmentKind(str, Enum):
     SECTION = "section"
 
 
+class OverrideKind(str, Enum):
+    """The closed re-point vocabulary a learned override entry may use (Cluster B).
+
+    Each value names exactly ONE brand-safe rewrite the resolver/generate path
+    already supports, so a lesson can NEVER invent a style/font/hex:
+
+    ``reroute_role``        - re-point a role that resolves to a stub at a DIFFERENT
+                              role the profile already declares; the rerouted role
+                              inherits that role's existing (shell-proven) resolver
+                              verbatim, still through the legal-type gate.
+    ``number_format``       - swap a role's number-format mask to another mask the
+                              shell's ``surface.xlsx.number_formats`` already uses.
+    ``register_demo_clear`` - register a captured demo string so the residual /
+                              demo-clear path removes it; only removes text.
+
+    This is a closed enum because each value maps to a real engine branch (which
+    consumer the validated override entry is routed through), mirroring
+    :class:`ResolverType` and :class:`ComprehensionStatus`.
+    """
+
+    REROUTE_ROLE = "reroute_role"
+    NUMBER_FORMAT = "number_format"
+    REGISTER_DEMO_CLEAR = "register_demo_clear"
+
+
 class OverflowCapability(str, Enum):
     """Per-format overflow detection mechanism (§6.5). docx never estimates."""
 
@@ -257,6 +287,15 @@ DEFAULT_L0_INVARIANTS: tuple[str, ...] = (
     # a profile with no (or an absent) comprehension block, so it is safe for the
     # model-free CI path and for pptx/xlsx.
     "comprehension_targets_exist",
+    # Fail-closed membership of every LEARNED override target against the surfaced
+    # deterministic inventories (Cluster B). Wired into ``run_qa`` next to
+    # ``comprehension_targets_exist`` in the SAME change that added the override
+    # consumer (the invariant list is documentation; ``run_qa`` /
+    # ``check_override_targets`` is the enforcement). ERRORs on a now-missing reroute
+    # target / mask / demo string and rejects-never-skips on an empty inventory.
+    # No-ops on a profile with no (or an ``absent``) overrides block, so it is safe
+    # for the model-free CI path and for all three formats.
+    "override_targets_exist",
     # The destructive-action floor (§6): reconciliation must never remove a
     # preserved cover anchor / index block the deterministic layer did not also
     # classify as placeholder/demo. Enforced at generate time by the generators
@@ -394,7 +433,10 @@ def build_envelope(
         "sections": {},
         "rules": {
             "auto_derived": {},
-            "overrides": {},
+            # Additive since 1.2.0 (the slot was reserved here). Always present and
+            # ``absent`` by default so the resolver takes ZERO new branches and bytes
+            # stay byte-identical until ``learn`` (B3) populates a sha-frozen lesson.
+            "overrides": empty_overrides(),
         },
         "anchors": {},
         "structure": structure if structure is not None else _empty_structure(),
@@ -549,6 +591,14 @@ def validate(profile: dict) -> list[str]:
     # against the surfaced inventories is the fail-closed QA check's job, not
     # this structural validator's). NEVER required.
     problems.extend(_validate_comprehension(profile.get("comprehension")))
+
+    # learned overrides block (optional, additive since 1.2.0 - the reserved
+    # ``rules.overrides`` slot). Absent / ``{}`` / ``status='absent'`` is fine and is
+    # the default; present must be well-shaped (shape-only - membership of a reroute
+    # target / mask / demo string against the surfaced shell inventories is the
+    # fail-closed ``check_override_targets`` job, not this structural validator's).
+    # NEVER required.
+    problems.extend(_validate_overrides((profile.get("rules") or {}).get("overrides")))
 
     # components / sections reusable-fragment registries. Each entry must be a dict
     # carrying a ``blocks`` list (the primitive template ``expand_components``
@@ -933,6 +983,22 @@ FRAGMENT_KINDS: frozenset[str] = frozenset(e.value for e in FragmentKind)
 # opaque ``seq_id`` brand-agnostically, without a language heuristic on the seq name.
 CAPTION_TARGETS: frozenset[str] = frozenset({"table", "figure"})
 
+# Closed re-point vocabulary for a learned override entry (Cluster B).
+OVERRIDE_KINDS: frozenset[str] = frozenset(e.value for e in OverrideKind)
+
+# The UNAMBIGUOUS recurring check-ids the deterministic ``learn`` step distills a
+# lesson from. Each maps cleanly to exactly one closed override kind, so a recurrence
+# of one of these can be turned into a brand-safe re-point without a model. (The
+# number-format rejection surfaces as a ``resolver_targets_exist`` finding -
+# checks_deterministic.py:224 - so it is covered by that id, not a fourth one.)
+LEARNABLE_CHECKS: frozenset[str] = frozenset(
+    {
+        "resolver_targets_exist",
+        "style_fallback",
+        "no_residual_template_text",
+    }
+)
+
 
 def empty_comprehension() -> dict:
     """Return an empty-but-shaped, ``absent`` comprehension block.
@@ -961,6 +1027,40 @@ def empty_comprehension() -> dict:
         # are mirrored onto ``theme.palette[key]`` (the derived sink). Empty is the
         # norm; the model never writes ``ref`` / a hex.
         "palette_annotations": {},
+    }
+
+
+def empty_overrides() -> dict:
+    """Return an empty-but-shaped, ``absent`` learned-overrides block (Cluster B).
+
+    This is what every extractor stamps into ``rules.overrides`` by default
+    (docx/pptx/xlsx), replacing the reserved ``{}`` so the block always exists and
+    the resolver/store can ask ``status`` / ``source_shell_sha256`` without guarding
+    for a missing key. ``absent`` (or a ``source_shell_sha256`` that no longer
+    matches the live shell) ⇒ the resolver takes ZERO new branches and generated
+    bytes are byte-identical to the no-overrides path.
+
+    Mirrors :func:`empty_comprehension` one-for-one (same freeze fields:
+    ``status`` / ``source_shell_sha256`` / ``confidence``) so the same
+    sha-bound presence test applies (``store.overrides_are_present``). The three
+    containers are the closed-kind sinks the deterministic ``learn`` writer fills;
+    ``provenance`` is a flat record of which ``(check, location, recurred_runs)``
+    produced each entry.
+    """
+    return {
+        "schema_version": OVERRIDES_SCHEMA_VERSION,
+        "status": ComprehensionStatus.ABSENT.value,
+        "source_shell_sha256": None,
+        "generated_by": None,
+        "confidence": 0.0,
+        # reroute_roles: { <requested_role_id>: <target_role_id> }
+        "reroute_roles": {},
+        # number_format_swaps: { <role_id>: <mask> }
+        "number_format_swaps": {},
+        # demo_clears: [ <captured demo string> ]
+        "demo_clears": [],
+        # provenance: { <opaque entry key>: { check, location, recurred_runs } }
+        "provenance": {},
     }
 
 
@@ -1099,6 +1199,109 @@ def _validate_comprehension(comp: Any) -> list[str]:
 
     # fragments: [ { ref, kind, blocks, purpose? } ] - reusable-fragment proposals.
     problems.extend(_validate_comp_fragments(comp.get("fragments")))
+    return problems
+
+
+def _validate_overrides(overrides: Any) -> list[str]:
+    """Validate the optional ``rules.overrides`` block (absent is fine).
+
+    SHAPE-ONLY, mirroring :func:`_validate_comprehension` (Ruling A/B). This checks
+    that:
+      - ``status`` (if present) is in the closed :class:`ComprehensionStatus` enum
+        (overrides reuse the present/absent/rejected freeze contract);
+      - ``confidence`` is a number in ``[0,1]`` (or null) and
+        ``source_shell_sha256`` is a hex string (or null);
+      - ``reroute_roles`` / ``number_format_swaps`` are objects of string→string;
+      - ``demo_clears`` is a list of strings;
+      - ``provenance`` is an object.
+
+    It deliberately does NOT check that a reroute target is a declared role, that a
+    mask is one the shell uses, or that a demo string was captured - that is the
+    fail-closed ``check_override_targets`` QA check (it needs the surfaced shell
+    inventories and must be able to ERROR on an empty inventory, which a
+    never-required structural validator must not do). NEVER required: a profile
+    without the key, with ``rules.overrides == {}``, or with ``status='absent'``,
+    yields no problems.
+    """
+    if overrides is None:
+        return []
+    if not isinstance(overrides, dict):
+        return ["rules.overrides: must be an object"]
+    # The reserved-empty slot (and the additive default before B3) is ``{}``: a
+    # never-required validator must accept it as the documented "absent" default.
+    if not overrides:
+        return []
+    problems: list[str] = []
+
+    status = overrides.get("status")
+    if status is not None and status not in COMPREHENSION_STATUSES:
+        problems.append(
+            f"rules.overrides.status: illegal value {status!r} "
+            f"(legal: {sorted(COMPREHENSION_STATUSES)})"
+        )
+
+    conf = overrides.get("confidence")
+    if conf is not None and not isinstance(conf, (int, float)):
+        problems.append(
+            f"rules.overrides.confidence: must be a number or null, got {conf!r}"
+        )
+    elif isinstance(conf, (int, float)) and not (0.0 <= float(conf) <= 1.0):
+        problems.append(f"rules.overrides.confidence: must be in [0,1], got {conf!r}")
+
+    sha = overrides.get("source_shell_sha256")
+    if sha is not None and not isinstance(sha, str):
+        problems.append(
+            f"rules.overrides.source_shell_sha256: must be a hex string or null, "
+            f"got {sha!r}"
+        )
+
+    # reroute_roles: { <requested_role_id>: <target_role_id> } - both strings.
+    reroutes = overrides.get("reroute_roles")
+    if reroutes is not None:
+        if not isinstance(reroutes, dict):
+            problems.append("rules.overrides.reroute_roles: must be an object")
+        else:
+            for requested, target in reroutes.items():
+                path = f"rules.overrides.reroute_roles.{requested}"
+                if not isinstance(requested, str) or not requested:
+                    problems.append(f"{path}: role id key must be a non-empty string")
+                if not isinstance(target, str) or not target:
+                    problems.append(
+                        f"{path}: target must be a non-empty string, got {target!r}"
+                    )
+
+    # number_format_swaps: { <role_id>: <mask> } - both strings.
+    swaps = overrides.get("number_format_swaps")
+    if swaps is not None:
+        if not isinstance(swaps, dict):
+            problems.append("rules.overrides.number_format_swaps: must be an object")
+        else:
+            for rid, mask in swaps.items():
+                path = f"rules.overrides.number_format_swaps.{rid}"
+                if not isinstance(rid, str) or not rid:
+                    problems.append(f"{path}: role id key must be a non-empty string")
+                if not isinstance(mask, str) or not mask:
+                    problems.append(
+                        f"{path}: mask must be a non-empty string, got {mask!r}"
+                    )
+
+    # demo_clears: [ <captured demo string> ].
+    clears = overrides.get("demo_clears")
+    if clears is not None:
+        if not isinstance(clears, list):
+            problems.append("rules.overrides.demo_clears: must be a list")
+        else:
+            for i, val in enumerate(clears):
+                if not isinstance(val, str) or not val:
+                    problems.append(
+                        f"rules.overrides.demo_clears[{i}]: must be a non-empty "
+                        f"string, got {val!r}"
+                    )
+
+    prov = overrides.get("provenance")
+    if prov is not None and not isinstance(prov, dict):
+        problems.append("rules.overrides.provenance: must be an object")
+
     return problems
 
 
@@ -1286,3 +1489,52 @@ def list_role_ids(profile: dict) -> list[str]:
     if isinstance(index, list) and index:
         return [r for r in index if r in roles]
     return [r for r in roles if r != "_index"]
+
+
+def overrides_block(profile: dict) -> dict:
+    """Return the ``rules.overrides`` block (``{}`` if absent / malformed).
+
+    A read helper peer of :func:`list_role_ids`: the resolver, store, and QA
+    consumers all read overrides through this single accessor so a missing
+    ``rules`` / ``overrides`` key (an old profile) degrades to the empty block
+    rather than raising. This is shape-tolerant only; presence/freeze is decided by
+    :func:`store.overrides_are_present`.
+    """
+    rules = profile.get("rules")
+    if not isinstance(rules, dict):
+        return {}
+    overrides = rules.get("overrides")
+    return overrides if isinstance(overrides, dict) else {}
+
+
+def list_overrides(profile: dict) -> list[tuple[str, str, str]]:
+    """Return the learned override entries as ``(kind, requested, target)`` triples.
+
+    Flattens the three closed-kind containers of ``rules.overrides`` into one list,
+    using the :class:`OverrideKind` value as the ``kind`` discriminator
+    (``register_demo_clear`` entries carry the cleared string as both the
+    ``requested`` and ``target`` slot - they map text, not a role pair). A read
+    helper only: it does NOT consult the freeze sha, so callers that need the LIVE
+    overrides must first gate on :func:`store.overrides_are_present`.
+
+    PUBLIC INSPECTION API with no internal engine caller yet: it exists so an
+    operator/agent surface (e.g. the ``list`` verb, or the B4 model bundle) can show
+    a profile's learned lessons without re-implementing the flattening. Do not
+    mistake it for dead code wired into the resolve path - the resolver reads the
+    raw containers directly.
+    """
+    overrides = overrides_block(profile)
+    entries: list[tuple[str, str, str]] = []
+    reroutes = overrides.get("reroute_roles")
+    if isinstance(reroutes, dict):
+        for requested, target in reroutes.items():
+            entries.append((OverrideKind.REROUTE_ROLE.value, requested, target))
+    swaps = overrides.get("number_format_swaps")
+    if isinstance(swaps, dict):
+        for rid, mask in swaps.items():
+            entries.append((OverrideKind.NUMBER_FORMAT.value, rid, mask))
+    clears = overrides.get("demo_clears")
+    if isinstance(clears, list):
+        for val in clears:
+            entries.append((OverrideKind.REGISTER_DEMO_CLEAR.value, val, val))
+    return entries
