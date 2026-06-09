@@ -359,5 +359,59 @@ class RealTemplateIntegrationTest(unittest.TestCase):
             )
 
 
+class TableD2VerifyTest(unittest.TestCase):
+    """Cluster D2: a profile that captures the template's OWN table facts (tblLook +
+    style + cell margins) must VERIFY clean - the table-target check surfaces no ERROR
+    when the captured facts are shell-backed."""
+
+    def _template(self, td):
+        from docx.oxml import OxmlElement as _Ox
+
+        template = td / "tbl_template.docx"
+        d = Document()
+        styles = d.styles.element
+        st = _Ox("w:style")
+        st.set(qn("w:type"), "table")
+        st.set(qn("w:styleId"), "AcmeTable")
+        st.set(qn("w:customStyle"), "1")
+        nm = _Ox("w:name")
+        nm.set(qn("w:val"), "Acme Table")
+        st.append(nm)
+        styles.append(st)
+        for _ in range(3):
+            t = d.add_table(rows=2, cols=2)
+            t.style = "Acme Table"
+            tblpr = t._tbl.tblPr
+            tblpr.find(qn("w:tblLook")).set(qn("w:val"), "01E0")
+            cm = _Ox("w:tblCellMar")
+            for side in ("left", "right"):
+                el = _Ox(f"w:{side}")
+                el.set(qn("w:w"), "80")
+                el.set(qn("w:type"), "dxa")
+                cm.append(el)
+            tblpr.append(cm)
+        d.save(template)
+        return template
+
+    def test_verify_does_not_error_on_observed_table_facts(self):
+        from brandkit.qa.gate import run_qa
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            template = self._template(td)
+            docx_extract.extract(template, "tbl", scope="project", cwd=td)
+            loaded = store.load_profile("tbl", "project", cwd=td)
+            # the captured table facts are present (the template declared them)
+            self.assertIn("table", loaded.profile.get("theme", {}))
+            report = run_qa(None, loaded.profile, qa="fast", shell=loaded.shell_path)
+            self.assertFalse(
+                any(
+                    f.check == "appearance_table_targets" and f.severity == "ERROR"
+                    for f in report.findings
+                ),
+                [f.message for f in report.findings],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

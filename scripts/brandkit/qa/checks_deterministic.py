@@ -977,6 +977,247 @@ def check_geometry_targets(shell, profile: dict) -> list[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Cluster D2: TABLE conditional-format targets (DOCX-ONLY).
+# The honest fail-closed peer of check_geometry_targets for the table axis. It proves
+# THREE independent dimensions: the tblLook bitmask is WELL-FORMED (shape/sanity; the
+# flags are spec-fixed bits, not template-derived names), the referenced table STYLE is
+# a SYMBOLIC ref that the shell's styles part actually defines (name-membership, like
+# check_appearance_targets does for fonts), and each cell margin is an intrinsic NUMBER
+# (twips) the template's OWN tables carried (observed-floor, like geometry).
+# ---------------------------------------------------------------------------
+
+# The valid OR-able ``w:tblLook`` flag bits (the only bits the bitmask may set). Mirrors
+# ``formats/docx/typography._TBLLOOK_FLAG_BITS``: firstRow / lastRow / firstColumn /
+# lastColumn / noHBand / noVBand. A bitmask with any other bit set is malformed.
+_TBLLOOK_VALID_BITS = 0x0020 | 0x0040 | 0x0080 | 0x0100 | 0x0200 | 0x0400
+# The OOXML 16-bit ``w:tblLook@w:val`` range.
+_TBLLOOK_MIN = 0
+_TBLLOOK_MAX = 0xFFFF
+# The four ``w:tblCellMar`` margin fields (the same twips range as paragraph geometry).
+_TABLE_CELL_MARGIN_FIELDS: tuple[str, ...] = (
+    "top_twips",
+    "bottom_twips",
+    "left_twips",
+    "right_twips",
+)
+_TABLE_CELL_MARGIN_SIDE: dict[str, str] = {
+    "top_twips": "top",
+    "bottom_twips": "bottom",
+    "left_twips": "left",
+    "right_twips": "right",
+}
+
+
+class ShellTableFacts(NamedTuple):
+    """The table facts a docx shell proves it carries on its OWN tables, the OBSERVED
+    FLOOR / membership inventory an applied table value is validated against:
+
+      - ``style_ids``: the ``@w:styleId`` of every ``w:style[@w:type='table']`` the
+        shell declares (the symbolic table-style inventory a referenced style must be
+        in);
+      - ``cell_margins``: ``{field: set[int]}`` of every ``w:tblCellMar`` side twips the
+        shell's own tables carry, per side.
+    """
+
+    style_ids: set
+    cell_margins: dict
+
+
+def _docx_table_style_ids(shell) -> set:
+    """The ``@w:styleId`` (and ``w:name@w:val``) of every ``w:style[@w:type='table']``
+    the shell's ``word/styles.xml`` declares. A referenced table style must be a member
+    of this set (fail-closed name-membership, like fonts). A missing styles part yields
+    an empty set (every applied style id then fails closed)."""
+    ids: set = set()
+    try:
+        xml = pack.read_part(shell, "word/styles.xml")
+    except KeyError:
+        return ids
+    root = pack.parse_xml_bytes(xml)
+    for style in root.findall(_W("style")):
+        if style.get(_W("type")) != "table":
+            continue
+        sid = style.get(_W("styleId"))
+        if sid:
+            ids.add(sid)
+        name_el = style.find(_W("name"))
+        if name_el is not None:
+            name = name_el.get(_W("val"))
+            if name:
+                ids.add(name)
+    return ids
+
+
+def _docx_collect_table_facts(shell) -> ShellTableFacts:
+    """Read the docx shell's OWN table facts: the table-style inventory (every
+    ``w:style[@w:type='table']`` id/name) and the observed cell-margin floor (every
+    ``w:tblPr/w:tblCellMar`` side twips the shell's tables carry). A missing/garbage
+    document part yields empty margin sets - the caller then fails closed on any applied
+    margin."""
+    style_ids = _docx_table_style_ids(shell)
+    cell_margins: dict = {field: set() for field in _TABLE_CELL_MARGIN_FIELDS}
+    try:
+        xml = pack.read_part(shell, "word/document.xml")
+    except KeyError:
+        return ShellTableFacts(style_ids=style_ids, cell_margins=cell_margins)
+    root = pack.parse_xml_bytes(xml)
+    for tblpr in root.iter(_W("tblPr")):
+        cell_mar = tblpr.find(_W("tblCellMar"))
+        if cell_mar is None:
+            continue
+        for field in _TABLE_CELL_MARGIN_FIELDS:
+            side = _TABLE_CELL_MARGIN_SIDE[field]
+            el = cell_mar.find(_W(side))
+            if el is None:
+                continue
+            val = el.get(_W("w"))
+            if val is None:
+                continue
+            try:
+                cell_margins[field].add(int(val))
+            except (TypeError, ValueError):
+                continue
+    return ShellTableFacts(style_ids=style_ids, cell_margins=cell_margins)
+
+
+def _collect_applied_table(profile: dict) -> list:
+    """Gather every ``(where, table-dict)`` the engine will APPLY: each role's
+    ``appearance.table`` and the document body table default (``theme.table.body``).
+    Sorted by ``where`` for a deterministic finding order."""
+    applied: list = []
+    for rid, entry in (profile.get("roles") or {}).items():
+        if rid == "_index" or not isinstance(entry, dict):
+            continue
+        table = (entry.get("appearance") or {}).get("table")
+        if isinstance(table, dict) and table:
+            applied.append((f"role {rid!r}", table))
+    body = ((profile.get("theme") or {}).get("table") or {}).get("body")
+    if isinstance(body, dict) and body:
+        applied.append(("theme.table.body", body))
+    applied.sort(key=lambda item: item[0])
+    return applied
+
+
+def check_table_targets(shell, profile: dict) -> list[Finding]:
+    """Verify every TABLE conditional-format value the engine will APPLY is well-formed
+    and shell-backed - the honest fail-closed peer of :func:`check_geometry_targets` for
+    the table axis (Cluster D2, DOCX-ONLY). It validates THREE INDEPENDENT dimensions:
+
+      - tblLook SHAPE / SANITY: the bitmask is an integer in the 16-bit OOXML range
+        ``[0, 0xFFFF]`` whose only set bits are the spec-fixed flags (firstRow / lastRow
+        / firstColumn / lastColumn / noHBand / noVBand). The flags are spec-fixed bits
+        (NOT template-derived names), so SHAPE is sufficient - no membership.
+      - TABLE-STYLE REFERENCE MEMBERSHIP: the referenced ``style_id`` is the
+        ``@w:styleId`` (or ``w:name``) of a ``w:style[@w:type='table']`` the shell's
+        styles part actually declares. The style's ``w:tblStylePr`` conditional formats
+        (the band fills / first-last emphasis) are AUTHORED IN THE SHELL - the engine
+        only references the style; an undefined style is a brand breach (ERROR).
+      - CELL-MARGINS SHAPE / OBSERVED-FLOOR: each margin twip is an integer in the OOXML
+        range AND byte-identical to a margin the shell's OWN tables carried. Margins are
+        intrinsic NUMBERS, so the floor is template-observed (like geometry), not a
+        symbolic inventory.
+
+    Fail-closed: a malformed bitmask / undefined style / malformed-or-un-observed margin
+    is ERROR. A no-op when the kind is not docx, the shell is absent, or no table
+    appearance is captured (every pre-D2 profile). A shell that cannot be parsed fails
+    CLOSED (a WARNING plus empty inventories, so every applied value is then rejected)."""
+    if shell is None or profile.get("kind") != schema.Kind.DOCX.value:
+        return []
+    applied = _collect_applied_table(profile)
+    if not applied:
+        return []
+    findings: list[Finding] = []
+    try:
+        facts = _docx_collect_table_facts(shell)
+    except Exception as exc:  # opening the shell must never crash the gate
+        findings.append(
+            Finding(
+                "appearance_table_targets",
+                schema.Severity.WARNING.value,
+                f"could not verify table targets against shell: {exc}",
+            )
+        )
+        facts = ShellTableFacts(
+            style_ids=set(),
+            cell_margins={field: set() for field in _TABLE_CELL_MARGIN_FIELDS},
+        )
+
+    def _err(where: str, msg: str) -> None:
+        findings.append(
+            Finding(
+                "appearance_table_targets",
+                schema.Severity.ERROR.value,
+                msg,
+                location=where,
+            )
+        )
+
+    for where, table in applied:
+        # (1) tblLook: SHAPE / SANITY - int, in 16-bit range, only spec-fixed flag bits.
+        tbllook = table.get("tblLook")
+        if tbllook is not None:
+            if not isinstance(tbllook, int) or isinstance(tbllook, bool):
+                _err(
+                    where,
+                    f"{where} table tblLook {tbllook!r} is not an integer bitmask",
+                )
+            elif not (_TBLLOOK_MIN <= tbllook <= _TBLLOOK_MAX):
+                _err(
+                    where,
+                    f"{where} table tblLook {tbllook} is out of the OOXML 16-bit range "
+                    f"[{_TBLLOOK_MIN}, {_TBLLOOK_MAX}]",
+                )
+            elif tbllook & ~_TBLLOOK_VALID_BITS:
+                _err(
+                    where,
+                    f"{where} table tblLook {tbllook:#06x} sets a bit outside the valid "
+                    f"flags (firstRow/lastRow/firstColumn/lastColumn/noHBand/noVBand)",
+                )
+        # (2) style_id: SYMBOLIC name-membership against the shell's table styles.
+        style_id = table.get("style_id")
+        if style_id is not None:
+            if not isinstance(style_id, str) or not style_id:
+                _err(
+                    where,
+                    f"{where} table style_id {style_id!r} is not a style reference",
+                )
+            elif style_id not in facts.style_ids:
+                _err(
+                    where,
+                    f"{where} table style {style_id!r} is not a table style the shell "
+                    f"defines (have {sorted(facts.style_ids)})",
+                )
+        # (3) cell_margins: SHAPE (int + range) then OBSERVED-FLOOR membership.
+        cell_margins = table.get("cell_margins") or {}
+        for field in _TABLE_CELL_MARGIN_FIELDS:
+            if field not in cell_margins:
+                continue
+            value = cell_margins[field]
+            if not isinstance(value, int) or isinstance(value, bool):
+                _err(
+                    where,
+                    f"{where} table cell_margins.{field} {value!r} is not an integer "
+                    "twips value",
+                )
+                continue
+            if not (_GEOMETRY_TWIPS_MIN <= value <= _GEOMETRY_TWIPS_MAX):
+                _err(
+                    where,
+                    f"{where} table cell_margins.{field} {value} twips is out of the "
+                    f"sane OOXML range [{_GEOMETRY_TWIPS_MIN}, {_GEOMETRY_TWIPS_MAX}]",
+                )
+                continue
+            observed = facts.cell_margins.get(field, set())
+            if value not in observed:
+                _err(
+                    where,
+                    f"{where} table cell_margins.{field} {value} twips is not observed "
+                    f"on any table in the shell (have {sorted(observed)})",
+                )
+    return findings
+
+
 def _pptx_layout_names(shell) -> set:
     prs = Presentation(shell)
     return {layout.name for layout in prs.slide_layouts}

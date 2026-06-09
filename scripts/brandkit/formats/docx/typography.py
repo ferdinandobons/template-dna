@@ -39,6 +39,7 @@ behavior is unchanged.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Optional
 
 from docx.enum.dml import MSO_COLOR_TYPE, MSO_THEME_COLOR
@@ -58,6 +59,9 @@ from brandkit.common.typography import (
 from brandkit.common.typography import (
     capture_paragraph_geometry as _capture_paragraph_geometry,
 )
+from brandkit.common.typography import (
+    dominant as _dominant,
+)
 from brandkit.ooxml import names
 
 # The generalizable capture engine (``capture_appearance`` / ``capture_palette_facts``
@@ -73,6 +77,7 @@ __all__ = [
     "capture_fonts",
     "capture_palette",
     "capture_geometry",
+    "capture_table_appearance",
     "PALETTE_WHERE",
 ]
 
@@ -492,3 +497,217 @@ def capture_geometry(doc, roles: dict, theme: dict) -> None:
     NOT wired into pptx/xlsx: paragraph geometry is WordprocessingML ``w:pPr`` only.
     """
     _capture_paragraph_geometry(_geometry_para_facts(doc), roles, theme)
+
+
+# ---------------------------------------------------------------------------
+# TABLE conditional-format appearance capture (Cluster D2, DOCX-ONLY).
+# ---------------------------------------------------------------------------
+# These readers are the table peers of the paragraph-geometry readers: they read the
+# EXPLICIT facts off a table's ``w:tblPr`` (the ``w:tblLook`` bitmask, the referenced
+# ``w:tblStyle@w:val`` style id, and the four ``w:tblCellMar`` margins) and fold them
+# under the SAME ``_dominant`` floor used for every other axis. A table that does not
+# declare a fact votes ``None`` (inherit) on that axis, so a value is recorded only
+# when an explicit value dominates the template's OWN tables. The engine NEVER reads or
+# writes a ``w:tblStylePr`` (the band fills / first-last emphasis live in the shell's
+# styles part); ``tblLook`` only ENABLES those shell-defined conditional formats and the
+# style id only REFERENCES the shell's table style (membership-checked at verify).
+# Additive and deterministic: a template with no dominant table fact leaves
+# ``role.appearance.table`` absent, so docx output stays byte-identical.
+
+# The six spec-fixed ``w:tblLook`` flag attributes, each a single bit in the captured
+# bitmask. The OOXML bit positions (firstRow=0x0020, lastRow=0x0040, firstColumn=0x0080,
+# lastColumn=0x0100, noHBand=0x0200, noVBand=0x0400) are the values Word writes when the
+# legacy attribute form is collapsed to ``w:tblLook@w:val``; we reproduce them so a
+# captured bitmask round-trips to the same toggles the template declared.
+_TBLLOOK_FLAG_BITS: tuple[tuple[str, int], ...] = (
+    ("firstRow", 0x0020),
+    ("lastRow", 0x0040),
+    ("firstColumn", 0x0080),
+    ("lastColumn", 0x0100),
+    ("noHBand", 0x0200),
+    ("noVBand", 0x0400),
+)
+
+# The four ``w:tblCellMar`` margin sides, each its own dominance axis (twips).
+_TABLE_CELL_MARGIN_SIDES: tuple[tuple[str, str], ...] = (
+    ("top_twips", "top"),
+    ("bottom_twips", "bottom"),
+    ("left_twips", "left"),
+    ("right_twips", "right"),
+)
+
+
+def _tbl_pr_of(table):
+    """A table's ``w:tblPr`` element, or ``None`` when it carries none. Crash-safe."""
+    try:
+        return table._tbl.find(_W("tblPr"))
+    except Exception:
+        return None
+
+
+def _table_tbllook(tblpr) -> Optional[int]:
+    """The table's ``w:tblLook`` bitmask as a single integer, or ``None`` when absent.
+
+    Reads either the modern ``w:tblLook@w:val`` hex/int attribute OR the legacy
+    per-flag attribute form (``@w:firstRow`` ...), collapsing the legacy flags into the
+    same integer bitmask Word uses for ``@w:val``. A table with no ``w:tblLook`` votes
+    ``None`` (inherit) on this axis. Fail-soft: a malformed value contributes nothing.
+    """
+    if tblpr is None:
+        return None
+    look = tblpr.find(_W("tblLook"))
+    if look is None:
+        return None
+    val = look.get(_W("val"))
+    if val is not None:
+        try:
+            return int(val, 16)
+        except (TypeError, ValueError):
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return None
+    # Legacy per-flag attribute form: collapse the set flags into the bitmask.
+    bits = 0
+    seen = False
+    for attr, bit in _TBLLOOK_FLAG_BITS:
+        raw = look.get(_W(attr))
+        if raw is None:
+            continue
+        seen = True
+        if raw in ("1", "true", "on"):
+            bits |= bit
+    return bits if seen else None
+
+
+def _table_style_id(tblpr) -> Optional[str]:
+    """The table's referenced ``w:tblStyle@w:val`` style id, or ``None`` when absent.
+
+    This is a SYMBOLIC reference into the shell's styles part (membership-checked at
+    verify); the engine never synthesizes the style's conditional formats. A table with
+    no explicit style reference votes ``None`` on this axis."""
+    if tblpr is None:
+        return None
+    style = tblpr.find(_W("tblStyle"))
+    if style is None:
+        return None
+    return style.get(_W("val")) or None
+
+
+def _table_cell_margins(tblpr) -> dict[str, int]:
+    """``{side_twips: int}`` for every ``w:tblCellMar`` side the table declares directly.
+
+    Each margin is read off ``w:tblPr/w:tblCellMar/w:{top,bottom,left,right}@w:w`` as
+    twips; a side the table does not carry is absent (it votes ``None`` on that side's
+    dominance axis). Fail-soft on a malformed/non-integer width."""
+    out: dict[str, int] = {}
+    if tblpr is None:
+        return out
+    cell_mar = tblpr.find(_W("tblCellMar"))
+    if cell_mar is None:
+        return out
+    for field, side in _TABLE_CELL_MARGIN_SIDES:
+        el = cell_mar.find(_W(side))
+        twips = _twips_attr(el, "w")
+        if twips is not None:
+            out[field] = twips
+    return out
+
+
+class _DocxTableFact:
+    """A docx table reduced to the structural table-appearance facts the D2 fold reads.
+
+    Every axis is read EXPLICITLY off ``w:tblPr`` (``None`` / absent == inherit), so a
+    table contributes a vote on an axis only when it declares that fact directly."""
+
+    __slots__ = ("tbllook", "style_id", "cell_margins")
+
+    def __init__(self, table) -> None:
+        tblpr = _tbl_pr_of(table)
+        self.tbllook = _table_tbllook(tblpr)
+        self.style_id = _table_style_id(tblpr)
+        self.cell_margins = _table_cell_margins(tblpr)
+
+
+def _table_facts(doc) -> list:
+    """A :class:`_DocxTableFact` per table in the document, in document order. A single
+    ordered list keeps the dominance ``Counter`` insertion order deterministic."""
+    return [_DocxTableFact(table) for table in doc.tables]
+
+
+def _fold_table_appearance(facts: list) -> dict:
+    """Fold the template's table facts into a captured ``table`` appearance dict, every
+    axis (tblLook, style id, each cell margin) gated INDEPENDENTLY by the SAME
+    :func:`~brandkit.common.typography.dominant` floor. Returns ``{}`` when nothing
+    dominates (so the caller writes no ``table`` key, zero-branch on no-capture)."""
+    if not facts:
+        return {}
+    out: dict = {}
+
+    look_counter: Counter = Counter()
+    for f in facts:
+        look_counter[f.tbllook] += 1
+    look_dom = _dominant(look_counter)
+    if look_dom is not None:
+        out["tblLook"] = look_dom[0]
+
+    style_counter: Counter = Counter()
+    for f in facts:
+        style_counter[f.style_id] += 1
+    style_dom = _dominant(style_counter)
+    if style_dom is not None:
+        out["style_id"] = style_dom[0]
+
+    cell_margins: dict[str, int] = {}
+    for field, _side in _TABLE_CELL_MARGIN_SIDES:
+        counter: Counter = Counter()
+        for f in facts:
+            counter[f.cell_margins.get(field)] += 1
+        dom = _dominant(counter)
+        if dom is not None:
+            cell_margins[field] = dom[0]
+    if cell_margins:
+        out["cell_margins"] = cell_margins
+
+    return out
+
+
+def capture_table_appearance(doc, roles: dict, theme: dict) -> None:
+    """Capture the dominant TABLE conditional-format facts (the ``w:tblLook`` bitmask,
+    the referenced table-style id, and the ``w:tblCellMar`` cell margins) into the
+    ``table.*`` roles (per role ``appearance.table``) and the document default
+    (``theme['table']['body']``), mutating both in place. DOCX-ONLY (Cluster D2).
+
+    Reads only the EXPLICIT ``w:tblPr`` facts the template's OWN tables declare; a table
+    that inherits a fact contributes nothing to THAT axis (every axis is sampled
+    independently under the SAME ``MIN_RUNS`` + ``MIN_DOMINANCE`` floor used for
+    font/size/color/geometry). The band fills / first-last emphasis live in the shell's
+    styles part (``w:tblStylePr``): this capture NEVER reads or copies them - the bitmask
+    only records WHICH of the shell style's own conditional formats the template enables,
+    and the style id only RECORDS the symbolic reference (membership-checked at verify).
+    Additive and deterministic: a template with no dominant table fact leaves
+    ``role.appearance.table`` absent, so docx output stays byte-identical.
+
+    NOT wired into pptx/xlsx: ``w:tblLook`` / ``w:tblStyle`` / ``w:tblCellMar`` are
+    WordprocessingML table constructs with no pptx/xlsx peer.
+    """
+    facts = _table_facts(doc)
+    if not facts:
+        return
+    body = _fold_table_appearance(facts)
+    if body:
+        theme.setdefault("table", {})["body"] = body
+    # The dominant facts are document-wide (a docx has ONE table style convention the
+    # captured roles share); the per-role table appearance is the same captured body,
+    # recorded on every ``table.*`` role so the resolver's role-specific axis carries it
+    # verbatim (the resolver merge then prefers role over body, identical to geometry).
+    if not body:
+        return
+    for rid, entry in roles.items():
+        if rid == "_index" or not isinstance(entry, dict):
+            continue
+        # Only the ``table`` family carries table appearance (``table`` / ``table.*``),
+        # mirroring the ``rid.startswith("list.")`` family test used elsewhere here.
+        if rid != "table" and not rid.startswith("table."):
+            continue
+        entry.setdefault("appearance", {})["table"] = body

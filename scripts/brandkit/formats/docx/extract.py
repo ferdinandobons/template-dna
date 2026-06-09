@@ -42,6 +42,14 @@ def extract(
     # DOCX-ONLY (Cluster D1): WordprocessingML pPr has no pptx/xlsx peer. Additive and
     # deterministic - a template with no dominant geometry leaves it absent (no-op).
     typography.capture_geometry(doc, role_registry, theme)
+    # Capture the template's dominant TABLE conditional-format facts (the w:tblLook
+    # bitmask, the referenced table-style id, and the w:tblCellMar cell margins from the
+    # template's OWN tables' w:tblPr) into role.appearance.table + theme.table.body.
+    # DOCX-ONLY (Cluster D2): the bitmask only ENABLES the shell style's own
+    # w:tblStylePr banding/first-last emphasis; the engine never synthesizes a fill.
+    # Additive and deterministic - a template with no dominant table fact leaves it
+    # absent (no-op, byte-identical generation).
+    typography.capture_table_appearance(doc, role_registry, theme)
     cover_anchors, anchors = cover.discover_cover(doc)
     demo_region = structure.detect_demo_region(doc)
     toc_present = structure.is_toc_present(doc)

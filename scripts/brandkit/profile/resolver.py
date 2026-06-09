@@ -351,11 +351,13 @@ class ProfileResolver:
     def _read_default_appearance(profile: dict) -> dict:
         """The document-level captured body typography, as an ``appearance`` dict.
 
-        FOUR INDEPENDENT axes: the body font/size live under ``theme.fonts.body``,
-        the body color under the additive ``theme.text.body`` key, and the body
-        paragraph GEOMETRY (Cluster D1, docx-only) under ``theme.geometry.body``. Each
-        axis is included only when the template actually captured it, so a pre-feature
-        profile yields an empty dict (behavior unchanged)."""
+        FIVE INDEPENDENT axes: the body font/size live under ``theme.fonts.body``,
+        the body color under the additive ``theme.text.body`` key, the body paragraph
+        GEOMETRY (Cluster D1, docx-only) under ``theme.geometry.body``, and the body
+        TABLE conditional-format facts (Cluster D2, docx-only) under
+        ``theme.table.body``. Each axis is included only when the template actually
+        captured it, so a pre-feature profile yields an empty dict (behavior
+        unchanged)."""
         if not profile:
             return {}
         theme = profile.get("theme") or {}
@@ -374,14 +376,17 @@ class ProfileResolver:
         geometry = (theme.get("geometry") or {}).get("body")
         if geometry:
             out["geometry"] = geometry
+        table = (theme.get("table") or {}).get("body")
+        if table:
+            out["table"] = table
         return out
 
     def _merge_appearance(
         self, role_appearance: Optional[dict], *, role_id: Optional[str] = None
     ) -> dict:
-        """Effective appearance for a role across three INDEPENDENT axes (font, size,
-        color): the role's own captured value wins on each axis; otherwise the
-        document-level body value fills in.
+        """Effective appearance for a role across the INDEPENDENT axes (font, size,
+        color, geometry, table): the role's own captured value wins on each axis;
+        otherwise the document-level body value fills in.
 
         CRITICAL family gate: the FONT body-default flows to EVERY role (v1
         behavior) - a missing font means the document baseline, which is right for a
@@ -435,6 +440,16 @@ class ProfileResolver:
         geometry = role_appearance.get("geometry") or default.get("geometry")
         if geometry:
             out["geometry"] = geometry
+
+        # TABLE conditional-format facts (Cluster D2, docx-only) are the fifth INDEPENDENT
+        # axis, merged exactly like geometry (NO family gate): a role's OWN captured table
+        # appearance wins, else the body table default fills in. Absent on both sides ⇒ no
+        # key (byte-identical no-table path). The captured tblLook bitmask / style id /
+        # cell margins are passed VERBATIM (the apply side re-emits them set-only-when-
+        # unset and the check re-validates the style id against the shell's table styles).
+        table = role_appearance.get("table") or default.get("table")
+        if table:
+            out["table"] = table
         return out
 
     @staticmethod

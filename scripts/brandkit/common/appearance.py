@@ -144,6 +144,22 @@ def op_geometry(op) -> Optional[dict]:
     return (getattr(op, "appearance", None) or {}).get("geometry")
 
 
+def op_table(op) -> Optional[dict]:
+    """The captured brand TABLE conditional-format facts this resolved op applies
+    (Cluster D2, docx-only), or ``None``.
+
+    Read STRICTLY from ``op.appearance.table`` (resolver-populated from the profile,
+    role-specific table appearance winning over the body table default; NO family gate).
+    The dict carries the ``tblLook`` bitmask, the referenced table ``style_id``, and the
+    ``cell_margins`` twips - facts the docx table writer re-emits set-only-when-unset
+    (the band fills/borders stay in the shell's style part). ``None`` for every profile
+    that carries no captured table appearance, so the no-table path is a byte-identical
+    no-op. The docx table writer (``_apply_table_style``) is the ONLY consumer; there is
+    deliberately NO backend protocol method, so the shared run/geometry orchestration is
+    untouched and pptx/xlsx never see this axis."""
+    return (getattr(op, "appearance", None) or {}).get("table")
+
+
 def resolve_run_color(
     resolver,
     token: Optional[str],

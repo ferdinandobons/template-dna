@@ -2610,5 +2610,581 @@ class GeometryEndToEndTest(unittest.TestCase):
             self.assertEqual(body_geom["spacing"]["after_twips"], 200)
 
 
+# ===========================================================================
+# Cluster D2: TABLE conditional-format fidelity (tblLook / table style / cell margins),
+# DOCX-ONLY. A NEW appearance axis under the SAME _dominant floor: capture, resolver
+# merge (no family gate), apply (set-only-when-unset; the synthetic python-docx default
+# tblLook is replaced), byte-identity (no-table path), the honest fail-closed check
+# (tblLook shape + style-ref membership + cell-margin observed-floor), and a docx
+# end-to-end. The band FILLS stay in the shell's style part - the engine only toggles.
+# ===========================================================================
+def _define_table_style(doc, style_id="AcmeTable", name="Acme Table"):
+    """Add a custom ``w:type='table'`` style so a captured/applied style id is a member
+    of the shell's table-style inventory (the check's name-membership floor)."""
+    styles = doc.styles.element
+    st = OxmlElement("w:style")
+    st.set(qn("w:type"), "table")
+    st.set(qn("w:styleId"), style_id)
+    st.set(qn("w:customStyle"), "1")
+    nm = OxmlElement("w:name")
+    nm.set(qn("w:val"), name)
+    st.append(nm)
+    bo = OxmlElement("w:basedOn")
+    bo.set(qn("w:val"), "TableNormal")
+    st.append(bo)
+    styles.append(st)
+
+
+def _brand_table(
+    doc,
+    *,
+    tbllook="01E0",
+    margins=None,
+    style_id="AcmeTable",
+    style_name="Acme Table",
+):
+    """Add a 2x2 table carrying an explicit ``w:tblLook@w:val``, a ``w:tblStyle`` ref,
+    and optional ``w:tblCellMar`` margins (a ``{side: twips}`` dict)."""
+    t = doc.add_table(rows=2, cols=2)
+    if style_name is not None:
+        t.style = style_name
+    tblpr = t._tbl.tblPr
+    if style_id is not None and tblpr.find(qn("w:tblStyle")) is None:
+        st = OxmlElement("w:tblStyle")
+        st.set(qn("w:val"), style_id)
+        tblpr.insert(0, st)
+    if tbllook is not None:
+        look = tblpr.find(qn("w:tblLook"))
+        if look is None:
+            look = OxmlElement("w:tblLook")
+            tblpr.append(look)
+        look.set(qn("w:val"), tbllook)
+    if margins:
+        cm = OxmlElement("w:tblCellMar")
+        for side, w in margins.items():
+            el = OxmlElement(f"w:{side}")
+            el.set(qn("w:w"), str(w))
+            el.set(qn("w:type"), "dxa")
+            cm.append(el)
+        tblpr.append(cm)
+    return t
+
+
+def _table_role(appearance=None):
+    entry = {
+        "resolver": {
+            "type": "named_style",
+            "style_id": "AcmeTable",
+            "style_name": "Acme Table",
+        }
+    }
+    if appearance is not None:
+        entry["appearance"] = appearance
+    return {"_index": ["table.default"], "table.default": entry}
+
+
+def _out_tblpr_xml(out):
+    """Every ``w:tblPr`` of the generated doc as serialized strings (raw assertions)."""
+    from lxml import etree
+
+    doc = Document(out)
+    return [
+        etree.tostring(t._tbl.tblPr, encoding="unicode")
+        for t in doc.tables
+        if t._tbl.tblPr is not None
+    ]
+
+
+# ---------------------------------------------------------------------------
+# capture: dominant tblLook / style / cell-margins; absent when the template declares
+# none; independent fields; below-dominance captures nothing
+# ---------------------------------------------------------------------------
+class CaptureTableAppearanceTest(unittest.TestCase):
+    def test_dominant_table_tbllook_captured(self):
+        doc = Document()
+        _define_table_style(doc)
+        for _ in range(3):
+            _brand_table(doc, tbllook="01E0", margins=None)
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        # 0x01E0 = firstRow|lastRow|firstColumn|lastColumn.
+        self.assertEqual(theme["table"]["body"]["tblLook"], 0x01E0)
+        self.assertEqual(
+            roles["table.default"]["appearance"]["table"]["tblLook"], 0x01E0
+        )
+
+    def test_table_style_reference_captured(self):
+        doc = Document()
+        _define_table_style(doc)
+        for _ in range(3):
+            _brand_table(doc)
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        self.assertEqual(theme["table"]["body"]["style_id"], "AcmeTable")
+
+    def test_table_cell_margins_captured(self):
+        doc = Document()
+        _define_table_style(doc)
+        for _ in range(3):
+            _brand_table(doc, margins={"top": 120, "bottom": 120, "left": 80})
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        margins = theme["table"]["body"]["cell_margins"]
+        self.assertEqual(margins["top_twips"], 120)
+        self.assertEqual(margins["bottom_twips"], 120)
+        self.assertEqual(margins["left_twips"], 80)
+        # right was never declared -> absent (independent fields)
+        self.assertNotIn("right_twips", margins)
+
+    def test_no_table_declares_nothing_is_absent(self):
+        # A doc with NO tables leaves theme.table absent (no-op).
+        doc = Document()
+        for _ in range(5):
+            doc.add_paragraph("body")
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        self.assertNotIn("table", theme)
+        self.assertNotIn("table", roles["table.default"].get("appearance", {}))
+
+    def test_below_dominance_table_floor_captures_nothing(self):
+        # Only 2 tables (< MIN_RUNS=3): nothing is captured.
+        doc = Document()
+        _define_table_style(doc)
+        for _ in range(2):
+            _brand_table(doc, tbllook="01E0")
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        self.assertNotIn("table", theme)
+
+    def test_minority_tbllook_value_is_not_captured(self):
+        # 5 tables: 2 carry a custom 01E0, 3 carry the python-docx default 04A0. The
+        # default (3/5) dominates instead, so a minority custom look does not win.
+        doc = Document()
+        _define_table_style(doc)
+        for _ in range(2):
+            _brand_table(doc, tbllook="01E0")
+        for _ in range(3):
+            _brand_table(doc, tbllook=None)  # keeps python-docx default 04A0
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        self.assertEqual(theme["table"]["body"]["tblLook"], 0x04A0)
+
+    def test_table_capture_is_idempotent_on_rerun(self):
+        doc = Document()
+        _define_table_style(doc)
+        for _ in range(3):
+            _brand_table(doc, margins={"left": 80, "right": 80})
+        roles = _table_role(appearance={})
+        theme = {"colors": {}, "fonts": {}}
+        typography.capture_table_appearance(doc, roles, theme)
+        first = dict(roles["table.default"]["appearance"]["table"])
+        typography.capture_table_appearance(doc, roles, theme)
+        self.assertEqual(roles["table.default"]["appearance"]["table"], first)
+
+
+# ---------------------------------------------------------------------------
+# resolver: role-specific table appearance wins; body fills in for EVERY table role
+# (NO family gate, like geometry)
+# ---------------------------------------------------------------------------
+class ResolverTableAppearanceTest(unittest.TestCase):
+    def _prof(self, *, body=None, role_table=None):
+        theme = {"colors": {}, "fonts": {}}
+        if body is not None:
+            theme["table"] = {"body": body}
+        appearance = {"table": role_table} if role_table is not None else {}
+        return {
+            "kind": "docx",
+            "theme": theme,
+            "roles": {
+                "_index": ["table.default"],
+                "table.default": {
+                    "resolver": {"type": "named_style", "style_id": "AcmeTable"},
+                    "appearance": appearance,
+                    "status": "robust",
+                    "confidence": 1.0,
+                },
+            },
+        }
+
+    def test_role_table_wins_over_body(self):
+        prof = self._prof(body={"tblLook": 0x04A0}, role_table={"tblLook": 0x01E0})
+        op = ProfileResolver(prof).resolve_role("table.default", fallback=None)
+        self.assertEqual(op.appearance["table"]["tblLook"], 0x01E0)
+
+    def test_body_table_flows_to_table_role_no_family_gate(self):
+        # Table appearance has NO family gate: a table role with no captured table
+        # appearance DOES inherit the body table default.
+        prof = self._prof(body={"style_id": "AcmeTable"})
+        op = ProfileResolver(prof).resolve_role("table.default", fallback=None)
+        self.assertEqual(op.appearance["table"]["style_id"], "AcmeTable")
+
+    def test_pre_d2_profile_resolves_without_table(self):
+        prof = self._prof()
+        op = ProfileResolver(prof).resolve_role("table.default", fallback=None)
+        self.assertNotIn("table", op.appearance)
+
+
+# ---------------------------------------------------------------------------
+# apply: tblLook / style / margins written to w:tblPr; set-only-when-unset; the
+# synthetic python-docx default tblLook is replaced; KPI-as-table inherits
+# ---------------------------------------------------------------------------
+class ApplyTableAppearanceTest(unittest.TestCase):
+    def _shell_with_table_style(self, tmp_path):
+        shell = tmp_path / "shell.docx"
+        d = Document()
+        _define_table_style(d)
+        d.save(shell)
+        return shell
+
+    def _prof_with_body_table(self, table):
+        return _profile(theme={"colors": {}, "fonts": {}, "table": {"body": table}})
+
+    def test_tbllook_applied_replacing_synthetic_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell_with_table_style(Path(td))
+            out = Path(td) / "out.docx"
+            prof = self._prof_with_body_table({"tblLook": 0x01E0})
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table(
+                        columns=[{"t": "A"}],
+                        rows=[[ir.TableCell(runs=[{"t": "1"}])]],
+                    )
+                ]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            tblpr_xml = "\n".join(_out_tblpr_xml(out))
+            self.assertIn('w:val="01E0"', tblpr_xml)
+            self.assertNotIn('w:val="04A0"', tblpr_xml)  # synthetic default replaced
+
+    def test_table_style_applied(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell_with_table_style(Path(td))
+            out = Path(td) / "out.docx"
+            prof = self._prof_with_body_table({"style_id": "AcmeTable"})
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table(
+                        columns=[{"t": "A"}],
+                        rows=[[ir.TableCell(runs=[{"t": "1"}])]],
+                    )
+                ]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            self.assertIn("AcmeTable", "\n".join(_out_tblpr_xml(out)))
+
+    def test_cell_margins_applied(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell_with_table_style(Path(td))
+            out = Path(td) / "out.docx"
+            prof = self._prof_with_body_table(
+                {"cell_margins": {"top_twips": 120, "left_twips": 80}}
+            )
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table(
+                        columns=[{"t": "A"}],
+                        rows=[[ir.TableCell(runs=[{"t": "1"}])]],
+                    )
+                ]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            tblpr_xml = "\n".join(_out_tblpr_xml(out))
+            self.assertIn('w:w="120"', tblpr_xml)
+            self.assertIn('w:w="80"', tblpr_xml)
+
+    def test_authored_tbllook_not_clobbered(self):
+        # Set-only-when-unset: a tblPr that already carries an AUTHORED (non-default)
+        # tblLook is never overwritten by the captured value.
+        from brandkit.formats.docx import generate as gen
+
+        doc = Document()
+        t = doc.add_table(rows=1, cols=1)
+        t._tbl.tblPr.find(qn("w:tblLook")).set(qn("w:val"), "00A0")  # authored
+        op = ProfileResolver(
+            {
+                "kind": "docx",
+                "theme": {},
+                "roles": {
+                    "_index": ["table.default"],
+                    "table.default": {
+                        "resolver": {"type": "named_style", "style_id": "AcmeTable"},
+                        "appearance": {"table": {"tblLook": 0x01E0}},
+                    },
+                },
+            }
+        ).resolve_role("table.default", fallback=None)
+        gen._apply_table_appearance(t, op)
+        self.assertEqual(t._tbl.tblPr.find(qn("w:tblLook")).get(qn("w:val")), "00A0")
+
+    def test_authored_margin_side_not_clobbered(self):
+        from brandkit.formats.docx import generate as gen
+
+        doc = Document()
+        t = doc.add_table(rows=1, cols=1)
+        tblpr = t._tbl.tblPr
+        cm = OxmlElement("w:tblCellMar")
+        left = OxmlElement("w:left")
+        left.set(qn("w:w"), "999")
+        left.set(qn("w:type"), "dxa")
+        cm.append(left)
+        tblpr.append(cm)
+        op = ProfileResolver(
+            {
+                "kind": "docx",
+                "theme": {"table": {"body": {"cell_margins": {"left_twips": 80}}}},
+                "roles": {
+                    "_index": ["table.default"],
+                    "table.default": {
+                        "resolver": {"type": "named_style", "style_id": "AcmeTable"},
+                        "appearance": {},
+                    },
+                },
+            }
+        ).resolve_role("table.default", fallback=None)
+        gen._apply_table_appearance(t, op)
+        left_el = t._tbl.tblPr.find(qn("w:tblCellMar")).find(qn("w:left"))
+        self.assertEqual(left_el.get(qn("w:w")), "999")  # authored value preserved
+
+    def test_kpi_as_table_inherits_table_appearance(self):
+        # KPI / synthetic tables route through the SAME _write_table path, so they get
+        # the table.default appearance.table for free (no separate KPI styling).
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell_with_table_style(Path(td))
+            out = Path(td) / "out.docx"
+            prof = _profile(
+                theme={
+                    "colors": {},
+                    "fonts": {},
+                    "table": {"body": {"tblLook": 0x01E0}},
+                },
+                roles=_table_role(appearance={}),
+            )
+            # A KPI block synthesizes a table internally via _write_table.
+            idoc = ir.IntermediateDocument(
+                blocks=[ir.Kpi(items=[ir.KpiItem(label="Revenue", value="$3.2M")])]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            self.assertIn('w:val="01E0"', "\n".join(_out_tblpr_xml(out)))
+
+    def test_empty_table_appearance_is_noop(self):
+        from brandkit.formats.docx import generate as gen
+
+        doc = Document()
+        t = doc.add_table(rows=1, cols=1)
+        op = ProfileResolver(
+            {
+                "kind": "docx",
+                "theme": {},
+                "roles": {
+                    "_index": ["table.default"],
+                    "table.default": {
+                        "resolver": {"type": "named_style", "style_id": "AcmeTable"},
+                        "appearance": {},
+                    },
+                },
+            }
+        ).resolve_role("table.default", fallback=None)
+        # No captured table appearance -> op_table is None -> no mutation.
+        look_before = t._tbl.tblPr.find(qn("w:tblLook")).get(qn("w:val"))
+        gen._apply_table_appearance(t, op)
+        self.assertEqual(
+            t._tbl.tblPr.find(qn("w:tblLook")).get(qn("w:val")), look_before
+        )
+
+
+# ---------------------------------------------------------------------------
+# byte-identity: a no-table profile takes ZERO new branches
+# ---------------------------------------------------------------------------
+class TableByteIdentityTest(unittest.TestCase):
+    def _gen_hash(self, prof):
+        with tempfile.TemporaryDirectory() as td:
+            shell = _shell(Path(td))
+            out = Path(td) / "out.docx"
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table(
+                        columns=[{"t": "A"}],
+                        rows=[[ir.TableCell(runs=[{"t": "1"}])]],
+                    )
+                ]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            import hashlib
+
+            return hashlib.sha256(out.read_bytes()).hexdigest()
+
+    def test_no_table_profile_is_unchanged_from_empty(self):
+        plain = _profile(theme={"colors": {}, "fonts": {}})
+        with_empty_table = _profile(theme={"colors": {}, "fonts": {}, "table": {}})
+        self.assertEqual(self._gen_hash(plain), self._gen_hash(with_empty_table))
+
+    def test_table_apply_is_byte_idempotent(self):
+        prof = _profile(
+            theme={"colors": {}, "fonts": {}, "table": {"body": {"tblLook": 0x01E0}}}
+        )
+        self.assertEqual(self._gen_hash(prof), self._gen_hash(prof))
+
+
+# ---------------------------------------------------------------------------
+# check: tblLook shape + style-ref membership + cell-margin observed-floor
+# ---------------------------------------------------------------------------
+class TableTargetsCheckTest(unittest.TestCase):
+    def _shell(self, tmp_path, *, style=True, margins=None):
+        shell = tmp_path / "shell.docx"
+        d = Document()
+        if style:
+            _define_table_style(d)
+        if margins is not None:
+            _brand_table(d, tbllook=None, margins=margins, style_name=None)
+        d.save(shell)
+        return shell
+
+    def _prof(self, table):
+        prof = schema.build_envelope("docx", {"name": "t"})
+        prof["surface"] = {"docx": {}}
+        prof["theme"] = {"colors": {}, "fonts": {}, "table": {"body": table}}
+        prof["roles"] = {"_index": []}
+        return prof
+
+    def test_check_table_targets_style_membership(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td))
+            ok = self._prof({"style_id": "AcmeTable"})
+            self.assertEqual(checks_deterministic.check_table_targets(shell, ok), [])
+            bad = self._prof({"style_id": "BrandTable"})  # not in the shell
+            findings = checks_deterministic.check_table_targets(shell, bad)
+            self.assertTrue(
+                any(
+                    f.check == "appearance_table_targets"
+                    and f.severity == schema.Severity.ERROR.value
+                    and "not a table style the shell defines" in f.message
+                    for f in findings
+                )
+            )
+
+    def test_check_table_targets_tbllook_wellformed(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td))
+            ok = self._prof({"tblLook": 0x01E0})
+            self.assertEqual(checks_deterministic.check_table_targets(shell, ok), [])
+            # a bit outside the valid flag set is malformed
+            bad = self._prof({"tblLook": 0x8000})
+            findings = checks_deterministic.check_table_targets(shell, bad)
+            self.assertTrue(
+                any("outside the valid flags" in f.message for f in findings)
+            )
+            # out of the 16-bit range
+            oor = self._prof({"tblLook": 99999})
+            findings = checks_deterministic.check_table_targets(shell, oor)
+            self.assertTrue(any("16-bit range" in f.message for f in findings))
+            # a non-integer bitmask
+            nonint = self._prof({"tblLook": "01E0"})
+            findings = checks_deterministic.check_table_targets(shell, nonint)
+            self.assertTrue(
+                any("is not an integer bitmask" in f.message for f in findings)
+            )
+
+    def test_check_table_targets_margins_observed_floor(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td), margins={"left": 80, "right": 80})
+            ok = self._prof({"cell_margins": {"left_twips": 80}})
+            self.assertEqual(checks_deterministic.check_table_targets(shell, ok), [])
+            # an un-observed margin is rejected (observed-floor)
+            synth = self._prof({"cell_margins": {"left_twips": 999}})
+            findings = checks_deterministic.check_table_targets(shell, synth)
+            self.assertTrue(any("not observed" in f.message for f in findings))
+            # out-of-range margin is rejected (shape)
+            oor = self._prof({"cell_margins": {"left_twips": -50000}})
+            findings = checks_deterministic.check_table_targets(shell, oor)
+            self.assertTrue(any("out of the sane" in f.message for f in findings))
+
+    def test_no_table_profile_has_no_finding(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td))
+            prof = schema.build_envelope("docx", {"name": "t"})
+            prof["theme"] = {"colors": {}, "fonts": {}}
+            prof["roles"] = {"_index": []}
+            self.assertEqual(checks_deterministic.check_table_targets(shell, prof), [])
+
+    def test_non_docx_kind_is_noop(self):
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td))
+            prof = self._prof({"tblLook": 0x8000})
+            prof["kind"] = "pptx"
+            self.assertEqual(checks_deterministic.check_table_targets(shell, prof), [])
+
+    def test_wired_into_run_qa(self):
+        from brandkit.qa import gate
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td))
+            out = Path(td) / "out.docx"
+            prof = self._prof({"style_id": "BrandTable"})  # undefined -> ERROR
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table(
+                        columns=[{"t": "A"}],
+                        rows=[[ir.TableCell(runs=[{"t": "1"}])]],
+                    )
+                ]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            report = gate.run_qa(out, prof, shell=shell)
+            self.assertTrue(
+                any(f.check == "appearance_table_targets" for f in report.findings)
+            )
+
+
+# ---------------------------------------------------------------------------
+# end-to-end: extract a template with dominant table facts -> profile -> generate
+# -> table appearance applied -> check passes
+# ---------------------------------------------------------------------------
+class TableEndToEndTest(unittest.TestCase):
+    def test_extract_apply_verify_table_appearance(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            template = tmp / "template.docx"
+            d = Document()
+            _define_table_style(d)
+            for _ in range(3):
+                _brand_table(d, tbllook="01E0", margins={"left": 80, "right": 80})
+            d.save(template)
+
+            saved = docx_extract.extract(template, "tblprof", cwd=tmp)
+            import json
+
+            profile = json.loads(Path(saved).read_text())
+            body = profile["theme"]["table"]["body"]
+            self.assertEqual(body["tblLook"], 0x01E0)
+            self.assertEqual(body["style_id"], "AcmeTable")
+            self.assertEqual(body["cell_margins"]["left_twips"], 80)
+
+            out = tmp / "out.docx"
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table(
+                        columns=[{"t": "A"}],
+                        rows=[[ir.TableCell(runs=[{"t": "1"}])]],
+                    )
+                ]
+            )
+            docx_generate.generate(profile, template, idoc, out)
+            tblpr_xml = "\n".join(_out_tblpr_xml(out))
+            self.assertIn('w:val="01E0"', tblpr_xml)
+            self.assertIn("AcmeTable", tblpr_xml)
+            self.assertIn('w:w="80"', tblpr_xml)
+            # the captured facts are shell-backed -> check passes
+            self.assertEqual(
+                checks_deterministic.check_table_targets(template, profile), []
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

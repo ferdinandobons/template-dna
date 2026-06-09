@@ -393,5 +393,155 @@ class DocxNumberingHelpersTest(unittest.TestCase):
         self.assertIsNone(docx_structure.num_family_for(doc, "424242", 0))
 
 
+def _define_table_style(doc, style_id="AcmeTable", name="Acme Table"):
+    """Add a custom ``w:type='table'`` style so a captured/applied style id is a member
+    of the shell's table-style inventory."""
+    styles = doc.styles.element
+    st = OxmlElement("w:style")
+    st.set(qn("w:type"), "table")
+    st.set(qn("w:styleId"), style_id)
+    st.set(qn("w:customStyle"), "1")
+    nm = OxmlElement("w:name")
+    nm.set(qn("w:val"), name)
+    st.append(nm)
+    bo = OxmlElement("w:basedOn")
+    bo.set(qn("w:val"), "TableNormal")
+    st.append(bo)
+    styles.append(st)
+
+
+def _brand_table(doc, *, tbllook="01E0", margins=None, style_name="Acme Table"):
+    """Add a 2x2 table with an explicit ``w:tblLook@w:val`` + ``w:tblStyle`` + optional
+    ``w:tblCellMar`` margins."""
+    t = doc.add_table(rows=2, cols=2)
+    if style_name is not None:
+        t.style = style_name
+    tblpr = t._tbl.tblPr
+    if tbllook is not None:
+        look = tblpr.find(qn("w:tblLook"))
+        if look is None:
+            look = OxmlElement("w:tblLook")
+            tblpr.append(look)
+        look.set(qn("w:val"), tbllook)
+    if margins:
+        cm = OxmlElement("w:tblCellMar")
+        for side, w in margins.items():
+            el = OxmlElement(f"w:{side}")
+            el.set(qn("w:w"), str(w))
+            el.set(qn("w:type"), "dxa")
+            cm.append(el)
+        tblpr.append(cm)
+    return t
+
+
+class DocxTableD2FidelityTest(unittest.TestCase):
+    """D2: the template's own table conditional-format facts (tblLook bitmask, table
+    style reference, cell margins) are captured and re-applied set-only-when-unset; the
+    band FILLS stay in the shell's style part (the engine only toggles)."""
+
+    def _template(self, td, *, tbllook="01E0", margins=None):
+        template = Path(td) / "template.docx"
+        d = Document()
+        _define_table_style(d)
+        for _ in range(3):
+            _brand_table(d, tbllook=tbllook, margins=margins)
+        d.save(template)
+        return template
+
+    def _profile(self, td, template):
+        cwd = Path.cwd()
+        os.chdir(td)
+        try:
+            pj = docx_extract.extract(template, "tbl", scope="project")
+            return json.loads(Path(pj).read_text())
+        finally:
+            os.chdir(cwd)
+
+    def _tblpr_xml(self, out):
+        from lxml import etree
+
+        return "\n".join(
+            etree.tostring(t._tbl.tblPr, encoding="unicode")
+            for t in Document(out).tables
+        )
+
+    def _idoc(self):
+        return ir.IntermediateDocument(
+            blocks=[
+                ir.Table(
+                    columns=[{"t": "A"}, {"t": "B"}],
+                    rows=[
+                        [
+                            ir.TableCell(runs=[{"t": "1"}]),
+                            ir.TableCell(runs=[{"t": "2"}]),
+                        ]
+                    ],
+                )
+            ]
+        )
+
+    def test_table_tblLook_applied_set_only_when_unset(self):
+        with tempfile.TemporaryDirectory() as td:
+            template = self._template(td, tbllook="01E0")
+            prof = self._profile(td, template)
+            self.assertEqual(prof["theme"]["table"]["body"]["tblLook"], 0x01E0)
+            out = Path(td) / "out.docx"
+            docx_generate.generate(prof, template, self._idoc(), out)
+            xml = self._tblpr_xml(out)
+            self.assertIn('w:val="01E0"', xml)
+            # python-docx's synthetic default 04A0 is replaced (the captured look wins).
+            self.assertNotIn('w:val="04A0"', xml)
+
+    def test_table_style_applied(self):
+        with tempfile.TemporaryDirectory() as td:
+            template = self._template(td)
+            prof = self._profile(td, template)
+            self.assertEqual(prof["theme"]["table"]["body"]["style_id"], "AcmeTable")
+            out = Path(td) / "out.docx"
+            docx_generate.generate(prof, template, self._idoc(), out)
+            xml = self._tblpr_xml(out)
+            # the table style reference is present (only once per table).
+            self.assertEqual(xml.count('w:tblStyle w:val="AcmeTable"'), 1)
+
+    def test_table_cell_margins_applied_set_only_when_unset(self):
+        with tempfile.TemporaryDirectory() as td:
+            template = self._template(
+                td, margins={"top": 120, "bottom": 120, "left": 80}
+            )
+            prof = self._profile(td, template)
+            margins = prof["theme"]["table"]["body"]["cell_margins"]
+            self.assertEqual(margins["top_twips"], 120)
+            self.assertEqual(margins["left_twips"], 80)
+            out = Path(td) / "out.docx"
+            docx_generate.generate(prof, template, self._idoc(), out)
+            xml = self._tblpr_xml(out)
+            self.assertIn('w:w="120"', xml)
+            self.assertIn('w:w="80"', xml)
+
+    def test_table_end_to_end(self):
+        # Extract a template with brand table style + tblLook + margins, generate on the
+        # same shell, verify the output table carries the same facts and the QA gate
+        # surfaces NO table-target ERROR.
+        from brandkit.qa import gate
+
+        with tempfile.TemporaryDirectory() as td:
+            template = self._template(td, tbllook="01E0", margins={"left": 80})
+            prof = self._profile(td, template)
+            out = Path(td) / "out.docx"
+            docx_generate.generate(prof, template, self._idoc(), out)
+            xml = self._tblpr_xml(out)
+            self.assertIn('w:val="01E0"', xml)
+            self.assertIn("AcmeTable", xml)
+            self.assertIn('w:w="80"', xml)
+            report = gate.run_qa(out, prof, shell=template)
+            self.assertFalse(
+                any(
+                    f.check == "appearance_table_targets"
+                    and f.severity == schema.Severity.ERROR.value
+                    for f in report.findings
+                )
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,14 @@ def run_qa(
     # the template's OWN paragraphs carried (the captured floor), never synthesized.
     # No-op for non-docx kinds and when no geometry is captured (pre-D1 profiles).
     findings = findings + checks_deterministic.check_geometry_targets(shell, profile)
+    # Honest fail-closed peer for the TABLE conditional-format axis (Cluster D2,
+    # docx-only): every applied tblLook bitmask must be WELL-FORMED (shape/sanity), every
+    # referenced table style must be one the shell's styles part DEFINES (symbolic
+    # name-membership, like fonts), and every cell margin must be a value the template's
+    # OWN tables carried (observed-floor, like geometry). The band fills stay in the shell
+    # style part - the engine only enables them. No-op for non-docx kinds and when no
+    # table appearance is captured (pre-D2 profiles).
+    findings = findings + checks_deterministic.check_table_targets(shell, profile)
     # Fail-closed comprehension-target membership (sibling of resolver targets):
     # every load-bearing comprehension ref must be a verbatim id from the surfaced
     # inventories. No-ops when comprehension is absent (model-free CI path,

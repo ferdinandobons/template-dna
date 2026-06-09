@@ -6,6 +6,37 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **Table-style fidelity is now a captured brand axis (DOCX only, Cluster D2).** The
+  same dominant-capture + appearance-seam + fail-closed-check pattern that ships for
+  font/size/color/geometry now also covers a generated table's CONDITIONAL-FORMAT facts,
+  so a generated table looks like the template's tables: the `w:tblLook` bitmask (which
+  of the table style's `w:tblStylePr` emphases - first/last row/column, row/column
+  banding - apply), the referenced table STYLE id, and the `w:tblCellMar` cell margins.
+  KPI-as-table inherits this for free (the KPI writer routes through the same table
+  path).
+  - **Capture** is a dominance statistic over the template's OWN tables, identical floor
+    to the other axes (`MIN_RUNS` + `MIN_DOMINANCE`): each fact is an INDEPENDENT axis,
+    recorded only when an explicit value dominates the template's tables. Nothing is
+    hardcoded to any template. Stored additively under `role.appearance.table` and
+    `theme.table.body`.
+  - **Apply** flows through the single resolver/appearance seam (`op.appearance.table`)
+    and writes each fact set-only-when-unset: an authored `tblLook` / style / margin is
+    never clobbered (python-docx's synthetic-default `tblLook` is treated as unset so the
+    captured bitmask can enable the shell style's own emphases). The engine NEVER authors
+    a `w:tblStylePr`, a fill, or a border - the band fills stay in the SHELL's style part
+    and are only TOGGLED via the bitmask + the style reference. A no-table profile
+    generates byte-identically (the frozen anchor stays green).
+  - **Verify** adds `check_table_targets` (gate-wired as `appearance_table_targets`), the
+    honest fail-closed peer that validates THREE INDEPENDENT dimensions: the `tblLook`
+    bitmask is WELL-FORMED (an int in the 16-bit OOXML range whose only set bits are the
+    spec-fixed flags - SHAPE, not membership); the referenced table STYLE is one the
+    shell's styles part actually defines (SYMBOLIC name-membership, like fonts); and each
+    cell margin is in the OOXML twips range AND byte-identical to a margin the template's
+    OWN tables carried (OBSERVED-FLOOR, like geometry). A malformed bitmask / undefined
+    style / un-observed margin is an ERROR.
+  - **Still DOCX-only:** pptx/xlsx never capture or apply table appearance
+    (`w:tblLook` / `w:tblStyle` / `w:tblCellMar` are WordprocessingML table constructs
+    with no peer in scope here); their output is untouched. Schema stays 1.2.0 (additive).
 - **Paragraph geometry is now a captured brand axis (DOCX only, Cluster D1).** The
   proven dominant-capture + appearance-seam + fail-closed-check pattern that ships for
   font family/size/color now also covers paragraph GEOMETRY: spacing (before/after/

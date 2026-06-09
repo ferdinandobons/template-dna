@@ -81,6 +81,13 @@ def _dominant(counter: Counter) -> Optional[tuple[Any, float]]:
     return value, ratio
 
 
+# Public alias: the same dominance gate (``MIN_RUNS`` + ``MIN_DOMINANCE``) the
+# typography/geometry axes use, exposed for the docx TABLE-appearance capture (Cluster
+# D2) which folds the template's own tables' tblLook / style / cell-margin facts under
+# the identical floor without re-implementing the gate.
+dominant = _dominant
+
+
 def _color_obj(bucket: tuple[str, ...]) -> dict:
     """Turn a captured color bucket key back into its stored ``appearance`` object."""
     if bucket[0] == "hex":

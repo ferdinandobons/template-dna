@@ -1599,5 +1599,185 @@ def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:
     _apply_style(doc, para, op, findings, label="")
 
 
+# The spec child order of ``CT_TblPr`` (``w:tblPr``), enough of it to place the three
+# table-appearance elements (``w:tblStyle`` first, ``w:tblCellMar`` then ``w:tblLook``
+# near the end) at a position Word accepts. Only the elements we (or the template) might
+# carry need to be listed before/after the ones we insert.
+_TBLPR_CHILD_ORDER: tuple[str, ...] = (
+    "w:tblStyle",
+    "w:tblpPr",
+    "w:tblOverlap",
+    "w:bidiVisual",
+    "w:tblStyleRowBandSize",
+    "w:tblStyleColBandSize",
+    "w:tblW",
+    "w:jc",
+    "w:tblCellSpacing",
+    "w:tblInd",
+    "w:tblBorders",
+    "w:shd",
+    "w:tblLayout",
+    "w:tblCellMar",
+    "w:tblLook",
+    "w:tblCaption",
+    "w:tblDescription",
+)
+
+
+def _insert_tblpr_child_ordered(tblpr, tag: str):
+    """Get-or-create ``tblpr/<tag>`` at the SPEC-CORRECT position in the ``CT_TblPr``
+    child sequence (so Word accepts the document). Returns the existing element when
+    present, else a new one inserted before the first existing successor in
+    :data:`_TBLPR_CHILD_ORDER` (appended only when no successor exists)."""
+    existing = tblpr.find(qn(tag))
+    if existing is not None:
+        return existing
+    el = OxmlElement(tag)
+    successors = _TBLPR_CHILD_ORDER[_TBLPR_CHILD_ORDER.index(tag) + 1 :]
+    for child in tblpr:
+        for succ in successors:
+            if child.tag == qn(succ):
+                child.addprevious(el)
+                return el
+    tblpr.append(el)
+    return el
+
+
+# python-docx's SYNTHETIC default ``w:tblLook@w:val`` (Word's "firstRow|firstColumn|
+# noVBand" template default), injected on EVERY ``doc.add_table`` regardless of the brand.
+# It is NOT an authored brand value, so the captured tblLook may replace it; an authored
+# value that DIFFERS from this default is treated as set and never clobbered.
+_TBLLOOK_DOCX_DEFAULT = 0x04A0
+
+# The six ``w:tblLook`` per-flag attribute names and their bits in the ``w:val`` bitmask
+# (the same mapping the capture reader uses). Word writes BOTH forms; emitting the legacy
+# attributes alongside ``w:val`` keeps older readers in sync.
+_TBLLOOK_FLAG_ATTRS: tuple[tuple[str, int], ...] = (
+    ("firstRow", 0x0020),
+    ("lastRow", 0x0040),
+    ("firstColumn", 0x0080),
+    ("lastColumn", 0x0100),
+    ("noHBand", 0x0200),
+    ("noVBand", 0x0400),
+)
+
+
+def _tbllook_is_unset(tblpr) -> bool:
+    """``True`` when the table carries NO authored ``w:tblLook`` - i.e. it is absent OR
+    is exactly python-docx's synthetic :data:`_TBLLOOK_DOCX_DEFAULT` (which the library
+    injects on every fresh ``add_table``, never a brand decision). An authored bitmask
+    that differs from the synthetic default is treated as SET (set-only-when-unset)."""
+    look = tblpr.find(qn("w:tblLook"))
+    if look is None:
+        return True
+    val = look.get(qn("w:val"))
+    if val is None:
+        return True
+    try:
+        return int(val, 16) == _TBLLOOK_DOCX_DEFAULT
+    except (TypeError, ValueError):
+        return False
+
+
+# The ``w:tblCellMar`` side -> captured ``cell_margins`` field, the same naming the
+# capture reader (``formats/docx/typography._TABLE_CELL_MARGIN_SIDES``) uses.
+_TABLE_CELL_MARGIN_SIDES: tuple[tuple[str, str], ...] = (
+    ("top", "top_twips"),
+    ("bottom", "bottom_twips"),
+    ("left", "left_twips"),
+    ("right", "right_twips"),
+)
+
+
+def _apply_table_cell_margins(tblpr, cell_margins: dict) -> None:
+    """Apply the captured ``cell_margins`` twips to ``w:tblPr/w:tblCellMar``, per-side
+    set-only-when-unset. Each side (``w:{top,bottom,left,right}``) is written ONLY when
+    the table does not already carry that side's margin, so an authored margin is never
+    clobbered. The ``w:tblCellMar`` (and each side element) is created in spec order."""
+    if not cell_margins:
+        return
+    cell_mar = None
+    for side, field in _TABLE_CELL_MARGIN_SIDES:
+        value = cell_margins.get(field)
+        if value is None:
+            continue
+        if cell_mar is None:
+            cell_mar = _insert_tblpr_child_ordered(tblpr, "w:tblCellMar")
+        side_el = cell_mar.find(qn(f"w:{side}"))
+        if side_el is not None:
+            # An authored side margin (carries an explicit width) is never clobbered.
+            if side_el.get(qn("w:w")) is not None:
+                continue
+        else:
+            side_el = OxmlElement(f"w:{side}")
+            cell_mar.append(side_el)
+        try:
+            side_el.set(qn("w:w"), str(int(value)))
+        except (TypeError, ValueError):
+            continue
+        # ``w:tblCellMar`` side widths are twips (``w:type='dxa'``), set only when the
+        # element did not already declare its own type.
+        if side_el.get(qn("w:type")) is None:
+            side_el.set(qn("w:type"), "dxa")
+
+
+def _apply_table_appearance(table, op) -> None:
+    """Apply the captured TABLE conditional-format facts (Cluster D2, docx-only) onto a
+    generated table's ``w:tblPr``, every fact SET-ONLY-WHEN-UNSET.
+
+    - ``style_id``: the table's ``w:tblStyle@w:val`` is written ONLY when the table does
+      not already reference a style. (``_apply_style`` already set ``table.style`` from
+      the resolver's named style; this is a defensive re-assert that never overrides an
+      authored reference, so it is normally a no-op.)
+    - ``tblLook``: the captured bitmask is written to ``w:tblLook@w:val`` (hex) ONLY when
+      the table carries no ``w:tblLook`` - it merely ENABLES the shell style's OWN
+      ``w:tblStylePr`` conditional formats (banding / first-last emphasis), never a fill.
+    - ``cell_margins``: each side is written set-only-when-unset (see
+      :func:`_apply_table_cell_margins`).
+
+    The engine NEVER authors a ``w:tblStylePr``, a fill, or a border here: the band fills
+    live in the shell's styles part and are toggled via the bitmask + the style
+    reference. A table that already carries an authored ``tblLook`` / style / margin is
+    left untouched. A profile with no captured table appearance never reaches this
+    function (``op_table`` returns ``None``), so the no-table path is byte-identical."""
+    table_appearance = appearance.op_table(op)
+    if not table_appearance:
+        return
+    # ``CT_Tbl.tblPr`` is a python-docx auto-creating property (the ``w:tblPr`` is the
+    # first child of ``w:tbl`` and is created on first access if absent).
+    tblpr = table._tbl.tblPr
+
+    style_id = table_appearance.get("style_id")
+    if style_id and tblpr.find(qn("w:tblStyle")) is None:
+        style_el = _insert_tblpr_child_ordered(tblpr, "w:tblStyle")
+        style_el.set(qn("w:val"), str(style_id))
+
+    tbllook = table_appearance.get("tblLook")
+    if tbllook is not None and _tbllook_is_unset(tblpr):
+        try:
+            bits = int(tbllook)
+        except (TypeError, ValueError):
+            bits = None
+        if bits is not None:
+            # Drop python-docx's synthetic-default ``w:tblLook`` (it carries stale legacy
+            # per-flag attributes) so the captured bitmask is the single source of truth.
+            stale = tblpr.find(qn("w:tblLook"))
+            if stale is not None:
+                tblpr.remove(stale)
+            look_el = _insert_tblpr_child_ordered(tblpr, "w:tblLook")
+            # Write BOTH the modern ``w:val`` (hex) and the legacy per-flag attributes,
+            # exactly as Word does, so old and new readers agree on the toggles.
+            look_el.set(qn("w:val"), format(bits, "04X"))
+            for attr, bit in _TBLLOOK_FLAG_ATTRS:
+                look_el.set(qn(f"w:{attr}"), "1" if (bits & bit) else "0")
+
+    _apply_table_cell_margins(tblpr, table_appearance.get("cell_margins") or {})
+
+
 def _apply_table_style(doc, table, op, findings: list[Finding]) -> None:
     _apply_style(doc, table, op, findings, label="table ", expect_style=True)
+    # Cluster D2: after the resolver's named table style is applied, re-emit the captured
+    # table conditional-format facts (tblLook bitmask / style reference / cell margins),
+    # set-only-when-unset, so the shell style's own banding/first-last emphasis renders.
+    # No-op for a profile with no captured table appearance (byte-identical).
+    _apply_table_appearance(table, op)
