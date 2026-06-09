@@ -2,7 +2,12 @@
 
 All notable changes to BrandDocs are documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-06-09
+
+Brand-fidelity release: the engine now follows a template's real per-run typography
+(font, size, color), applies model-named brand colors, fills content-control covers
+faithfully, and regenerates caption indexes from the new content. Schema stays 1.2.0
+(additive); profiles from earlier versions keep working unchanged.
 
 ### Added
 
@@ -389,6 +394,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.7.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.7.0
 [0.6.2]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.6.2
 [0.6.1]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.6.0
