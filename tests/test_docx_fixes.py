@@ -1442,6 +1442,33 @@ class ComprehensionReconcileTest(unittest.TestCase):
             self.assertFalse(any(f.check == "index_matches_content" for f in findings))
             self.assertFalse(any(f.check == "no_net_structure_loss" for f in findings))
 
+    def test_caption_index_cache_cleared_when_no_captions_emitted(self):
+        # Deterministic path (NO comprehension): a kept caption index whose
+        # sequence received no captions this run is rebuilt EMPTY. The field
+        # survives (dirty, Word recomputes on open) but the template's demo
+        # entries never reach the generated document - the "stale derived
+        # index" defect class, closed without removing template structure.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._build_shell(td)
+            prof = self._profile_for(shell)
+            out = Path(td) / "out.docx"
+            idoc = ir.IntermediateDocument(
+                blocks=[ir.Paragraph(runs=[{"t": "No captionable content."}])]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            gen = Document(out)
+            self.assertEqual(structure.kept_caption_index_seq_ids(gen), ["Tabella"])
+            text = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
+            self.assertNotIn("entry one", text)
+            self.assertNotIn("entry two", text)
+            # The caption-index field instruction is preserved verbatim.
+            instrs = [(i.text or "") for i in gen.element.body.iter(w("instrText"))]
+            self.assertTrue(
+                any("TOC" in i and '\\c "Tabella"' in i for i in instrs), instrs
+            )
+
     def test_index_clear_downgraded_when_not_corroborated(self):
         import tempfile
 
@@ -1484,8 +1511,14 @@ class ComprehensionReconcileTest(unittest.TestCase):
             )
             gen = Document(out)
             text = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
-            # The index was KEPT (not corroborated) and a WARNING was recorded.
-            self.assertIn("entry one", text)
+            # The index was KEPT (not corroborated) and a WARNING was recorded: the
+            # downgrade signal is the SURVIVING FIELD, not the demo cache - stale
+            # demo entries never outlive a generation regardless of the keep.
+            instrs = [(i.text or "") for i in gen.element.body.iter(w("instrText"))]
+            self.assertTrue(
+                any("TOC" in i and '\\c "Tabella"' in i for i in instrs), instrs
+            )
+            self.assertNotIn("entry one", text)
             self.assertTrue(any(f.check == "index_clear_downgraded" for f in findings))
 
     def test_index_clear_downgraded_when_below_confidence_floor(self):
@@ -1533,8 +1566,14 @@ class ComprehensionReconcileTest(unittest.TestCase):
             )
             gen = Document(out)
             text = "".join(t.text or "" for t in gen.element.body.iter(w("t")))
-            # The index was KEPT (low confidence) and a WARNING was recorded.
-            self.assertIn("entry one", text)
+            # The index was KEPT (low confidence) and a WARNING was recorded: the
+            # downgrade signal is the SURVIVING FIELD, not the demo cache - stale
+            # demo entries never outlive a generation regardless of the keep.
+            instrs = [(i.text or "") for i in gen.element.body.iter(w("instrText"))]
+            self.assertTrue(
+                any("TOC" in i and '\\c "Tabella"' in i for i in instrs), instrs
+            )
+            self.assertNotIn("entry one", text)
             downgrades = [f for f in findings if f.check == "index_clear_downgraded"]
             self.assertTrue(downgrades)
             self.assertIn("confidence 0.30", downgrades[0].message)

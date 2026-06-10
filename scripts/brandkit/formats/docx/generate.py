@@ -126,10 +126,15 @@ def generate(
     structure.refresh_visible_outline_toc_cache(doc, heading_paras)
 
     # Rebuild every KEPT caption index's visible cache from the captions just emitted
-    # (the SEQ classes the indexer collected), so a headless render shows the new
-    # entries instead of the template's stale ones. No-op when nothing was collected.
-    if caption_ctx is not None and caption_ctx.entries:
-        structure.refresh_visible_caption_index_cache(doc, caption_ctx.entries)
+    # (the SEQ classes the indexer collected). A kept index whose sequence received
+    # NO captions this run is rebuilt EMPTY: the field survives (dirty, Word
+    # recomputes on open) but the template's demo entries never reach the generated
+    # document. No-op when the document carries no caption index at all.
+    caption_entries: dict = dict(caption_ctx.entries) if caption_ctx is not None else {}
+    for seq in structure.kept_caption_index_seq_ids(doc):
+        caption_entries.setdefault(seq, [])
+    if caption_entries:
+        structure.refresh_visible_caption_index_cache(doc, caption_entries)
 
     # Refresh the preserved TOC (if any) so Word recomputes it on open - the new
     # headings written into the body will be picked up. No-op when there is no TOC.

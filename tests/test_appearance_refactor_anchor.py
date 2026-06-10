@@ -78,7 +78,15 @@ _SHELL = (
 #   c96548539684d65df6e91f5ee52009df191ad09670b1e1498672e2add16fa878
 # The no-outline-TOC byte-identity guarantee that this anchor used to stand in for
 # is now pinned genuinely by NoOutlineTocAnchorTest / _FROZEN_NO_TOC_SHA256 below.
-_FROZEN_SHA256 = "d6f261d75bcbe3319298d24e249f414856361078c4f860fd0ea19065aceb75b9"
+#
+# DELIBERATE RECOMPUTE (2026-06-10, second of the day): a kept caption index whose
+# sequence received no captions is now rebuilt EMPTY instead of keeping the
+# template's demo entries (the "stale derived index" contract). This shell carries
+# two caption indexes (TOC \c) and the anchor IDoc emits no captions, so their
+# demo caches are now cleared. Previous value (rich outline TOC, demo caption
+# caches kept):
+#   d6f261d75bcbe3319298d24e249f414856361078c4f860fd0ea19065aceb75b9
+_FROZEN_SHA256 = "c20599c329e7c9f3a7b696c8992b20c06b5d9d3f56b7d67f0c60c234ee063c24"
 
 
 def _anchor_profile() -> dict:
@@ -184,8 +192,15 @@ class AppearanceRefactorAnchorTest(unittest.TestCase):
 # _FROZEN_SHA256 above, an outline-TOC writer change must NEVER move this value.
 # Verified identical between pre-change HEAD and the rich-TOC writer (2026-06-10):
 # both produce exactly these bytes for the TOC-free triple.
+#
+# DELIBERATE RECOMPUTE (2026-06-10): moved by the caption-index empty-rebuild (the
+# derived TOC-free shell deliberately KEEPS the fixture's two caption indexes, and
+# their demo caches are now cleared when no captions are emitted), NOT by an
+# outline-TOC writer change - the contract above still holds: zero bookmarks, zero
+# rich entries on a TOC-free document. Previous value (demo caption caches kept):
+#   64d8f0963e0a67cdb012db922d9467aadc1c625ffd10f27b49d9d4c5d5504da6
 _FROZEN_NO_TOC_SHA256 = (
-    "64d8f0963e0a67cdb012db922d9467aadc1c625ffd10f27b49d9d4c5d5504da6"
+    "7520dfa3fc00c3f02c66bb8fcebf44025068892670ed0194f19bb563cf4fb84e"
 )
 
 _WML_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"

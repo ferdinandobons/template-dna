@@ -24,6 +24,16 @@ All notable changes to BrandDocs are documented in this file.
   fixture itself contains an outline TOC, so its cached-TOC bytes necessarily
   changed shape).
 
+- **Template demo entries no longer survive in derived indexes the content did
+  not feed.** A kept caption index (table-of-tables / table-of-figures) whose
+  sequence received no captions, and an outline TOC in a heading-less
+  generation, used to keep the template's cached demo entries (the "stale
+  derived index" defect class, visible in every preview renderer). Both caches
+  are now rebuilt EMPTY: the field code survives, dirty, so Word recomputes it
+  on open, but fabricated entries never reach the generated document. The
+  destructive-action floor is untouched: structure is still never removed
+  without corroboration; only the visible cache is honest now.
+
 ### Added
 
 - **Contributor onramp (REFLECTIONS P1).** `CONTRIBUTING.md` expanded from a

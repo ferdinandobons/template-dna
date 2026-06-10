@@ -1333,10 +1333,13 @@ def refresh_visible_outline_toc_cache(
     a malformed cache, or detached heading elements - the function falls back, per
     field and all-or-nothing, to the simple plain-text rewrite, and authors ZERO
     bookmarks. Documents without an outline TOC are never mutated.
+
+    An EMPTY ``headings`` list rebuilds every outline TOC cache empty (the field
+    code survives, dirty, for Word to recompute on open) so the template's demo
+    entries never outlive a heading-less generation - the same "stale derived
+    index" contract as the caption-index sibling.
     """
     headings3 = _normalize_outline_headings(headings)
-    if not headings3:
-        return 0
     plain_headings = [(level, text) for level, text, _ in headings3]
 
     body = doc.element.body
@@ -1371,8 +1374,10 @@ def refresh_visible_outline_toc_cache(
     # AND at least one field takes the rich shape AND every heading carries its
     # live generated paragraph; otherwise every plan is demoted to the plain
     # writer and zero bookmarks are authored (today's bytes exactly).
-    rich_mode = any(p["rich"] for p in plans) and all(
-        _is_live_paragraph(para, doc) for _, _, para in headings3
+    rich_mode = (
+        bool(headings3)
+        and any(p["rich"] for p in plans)
+        and all(_is_live_paragraph(para, doc) for _, _, para in headings3)
     )
     if rich_mode:
         bookmark_names = _author_heading_bookmarks(doc, headings3)
@@ -1715,6 +1720,30 @@ def _apply_rich_paragraph_outline_plan(
             body.remove(old)
 
 
+def kept_caption_index_seq_ids(doc) -> list[str]:
+    r"""Distinct ``\c`` sequence ids of every caption index present in the body.
+
+    The deterministic complement to the emitted-captions map: a kept caption
+    index whose sequence received NO captions this run must still have its
+    visible cache cleared, otherwise the template's demo entries survive into
+    the generated document (the "stale derived index" defect class). Document
+    order, first occurrence wins; malformed spans are skipped (same validity
+    filter as :func:`refresh_visible_caption_index_cache`).
+    """
+    seen: list[str] = []
+    for f in _toc_field_begins(list(doc.element.body)):
+        seq = f.get("seq_id")
+        if (
+            seq
+            and seq not in seen
+            and f.get("begin_index") is not None
+            and f.get("end_index") is not None
+            and f["end_index"] >= f["begin_index"]
+        ):
+            seen.append(seq)
+    return seen
+
+
 def refresh_visible_caption_index_cache(doc, entries_by_seq: dict) -> int:
     r"""Rewrite the visible cache of every KEPT caption index from the emitted captions.
 
@@ -1747,9 +1776,10 @@ def refresh_visible_caption_index_cache(doc, entries_by_seq: dict) -> int:
     ]
     rebuilt = 0
     for f in sorted(fields, key=lambda f: f["begin_index"], reverse=True):
+        # An empty entry list is a REBUILD-EMPTY, not a skip: the field survives
+        # (dirty, Word recomputes on open) with zero cached entries, so the
+        # template's demo entries never outlive a caption-less generation.
         entries = entries_by_seq.get(f["seq_id"]) or []
-        if not entries:
-            continue
         children = list(body)
         begin_i, end_i = f["begin_index"], f["end_index"]
         # Both bounds are validated BEFORE any children[...] access: a corrupted
