@@ -36,7 +36,7 @@
   <!-- TOP BAND -->
   <text x="48" y="72" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, sans-serif" font-size="42" font-weight="800" letter-spacing="-0.5" fill="#FFFFFF">Brand<tspan fill="#6EA8FE">Docs</tspan></text>
   <text x="1232" y="48" text-anchor="end" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="600" fill="#C9D8F5">A Claude Skill for generating documents</text>
-  <text x="1232" y="74" text-anchor="end" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="500" fill="#9DB4E8">that <tspan font-style="italic" fill="#C9D8F5">actually</tspan> follow your templates.</text>
+  <text x="1232" y="74" text-anchor="end" font-family="ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="600" fill="#C9D8F5">that actually follow your templates.</text>
 
   <!-- LEFT: the one company template (page with dog-ear) -->
   <path d="M 92 170 H 206 L 240 204 V 358 Q 240 370 228 370 H 92 Q 80 370 80 358 V 182 Q 80 170 92 170 Z" fill="#18223F" stroke="#33467A" stroke-width="2"/>
