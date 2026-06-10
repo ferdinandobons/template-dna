@@ -1,32 +1,44 @@
 # SPDX-License-Identifier: MIT
-"""DOCX brand typography capture (font family, size, and color).
+"""DOCX brand appearance capture (run typography and structural appearance).
 
-The brand's REAL visible typography often lives as DIRECT run-level formatting
-(``w:rPr/w:rFonts`` / ``w:sz`` / ``w:color``) on the template's content rather than
-in the named styles or the theme: a designed template may put everything in
-``Normal`` with a direct Roboto / Montserrat override at 22 half-points in accent1.
-Role inference (``roles.py``) and theme extraction read only named styles and
-``theme1.xml``, so those direct values are never captured and a generated document
-falls back to the ``docDefaults`` font/size/color.
+The brand's REAL visible appearance often lives as DIRECT formatting on the
+template's content rather than in the named styles or the theme: a designed
+template may put everything in ``Normal`` with a direct Roboto / Montserrat
+override at 22 half-points in accent1, hand-tuned paragraph spacing, and an
+explicit ``w:tblLook`` on every table. Role inference (``roles.py``) and theme
+extraction read only named styles and ``theme1.xml``, so those direct values are
+never captured and a generated document falls back to the ``docDefaults``.
 
-This module captures the DOMINANT direct run typography, deterministically, as
-THREE INDEPENDENT axes (font family, size, color) sampled in a SINGLE pass:
+This module captures the DOMINANT direct values, deterministically, as INDEPENDENT
+appearance axes:
 
-  - per role: the dominant explicit value among the runs that use the role's style
-    -> ``role['appearance']['font'] = {'latin': <name>}`` /
-    ``role['appearance']['size_hp'] = <int>`` /
-    ``role['appearance']['color'] = {'kind': ...}``;
-  - the document's effective body typography: the dominant explicit value across all
-    body runs -> ``theme['fonts']['body']['latin'/'size_hp']`` and
+  - run typography (:func:`capture_fonts`, a SINGLE pass over the runs): font
+    family, size, and color, per role (the dominant explicit value among the runs
+    that use the role's style -> ``role['appearance']['font'] = {'latin': <name>}``
+    / ``role['appearance']['size_hp'] = <int>`` / ``role['appearance']['color'] =
+    {'kind': ...}``) and as the document's effective body typography
+    (``theme['fonts']['body']['latin'/'size_hp']`` and
     ``theme['text']['body']['color']`` - the fallbacks the generator applies to a
-    paragraph whose role carries no captured value.
+    paragraph whose role carries no captured value);
+  - paragraph GEOMETRY (:func:`capture_geometry`, Cluster D1, docx-only): the
+    dominant explicit ``w:pPr`` spacing / indentation / paragraph borders / shading,
+    per role (``role['appearance']['geometry']``) and as the body default
+    (``theme['geometry']['body']``);
+  - TABLE conditional-format facts (:func:`capture_table_appearance`, Cluster D2,
+    docx-only): the dominant explicit ``w:tblLook`` bitmask, referenced table-style
+    id, and ``w:tblCellMar`` margins, per ``table.*`` role
+    (``role['appearance']['table']``) and as ``theme['table']['body']``.
+
+(The sixth axis, list NUMBERING / Cluster D3, is captured in ``roles.py``, not
+here.)
 
 Each axis is independent: a role may carry a captured size but no captured font
 (or vice versa). Only a clear DOMINANT is recorded per axis (at least
-:data:`_MIN_RUNS` explicit values and a winner covering at least
-:data:`_MIN_DOMINANCE` of them), with its dominance stored as a per-axis confidence
-(``confidence`` for font, ``size_confidence`` for size, ``color_confidence`` for
-color). Capture is deterministic (model-free).
+:data:`~brandkit.common.typography.MIN_RUNS` explicit values and a winner covering
+at least :data:`~brandkit.common.typography.MIN_DOMINANCE` of them), with its
+dominance stored as a per-axis confidence (``confidence`` for font,
+``size_confidence`` for size, ``color_confidence`` for color). Capture is
+deterministic (model-free).
 
 The brand guarantee is preserved: every captured value is a FACT observed in the
 template, stored in the profile, applied only via the resolver, and re-validated

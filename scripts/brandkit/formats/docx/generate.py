@@ -1099,6 +1099,46 @@ def _ensure_numbering_def_present(doc, shell_doc, abstract_num_id: str) -> None:
         out_root.append(clone)
 
 
+# The WordprocessingML ``CT_Lvl`` child sequence (spec-fixed order, ECMA-376
+# ``w:lvl``). A re-asserted level fact must be inserted BEFORE the first existing
+# child that follows it in this order (e.g. ``w:lvlText`` precedes ``w:pPr``), or a
+# strict OOXML reader rejects the cloned definition. The peer of
+# :data:`_PPR_CHILD_ORDER` / :data:`_TBLPR_CHILD_ORDER` for the numbering part.
+_LVL_CHILD_ORDER: tuple[str, ...] = (
+    "w:start",
+    "w:numFmt",
+    "w:lvlRestart",
+    "w:pStyle",
+    "w:isLgl",
+    "w:suff",
+    "w:lvlText",
+    "w:lvlPicBulletId",
+    "w:legacy",
+    "w:lvlJc",
+    "w:pPr",
+    "w:rPr",
+)
+
+
+def _insert_lvl_child_ordered(lvl, tag: str):
+    """Get-or-create ``lvl/<tag>`` at the SPEC-CORRECT position in the ``CT_Lvl`` child
+    sequence (so Word accepts the cloned numbering definition). Returns the existing
+    element when present, else a new one inserted before the first existing successor
+    in :data:`_LVL_CHILD_ORDER` (appended only when no successor exists)."""
+    existing = lvl.find(qn(tag))
+    if existing is not None:
+        return existing
+    el = OxmlElement(tag)
+    successors = _LVL_CHILD_ORDER[_LVL_CHILD_ORDER.index(tag) + 1 :]
+    for child in lvl:
+        for succ in successors:
+            if child.tag == qn(succ):
+                child.addprevious(el)
+                return el
+    lvl.append(el)
+    return el
+
+
 def _reassert_level_facts(lvl, facts: dict) -> None:
     """Re-assert one level's captured facts (numFmt / lvlText / indent) onto its
     ``w:lvl`` element, SET-ONLY-WHEN-UNSET (Cluster D3).
@@ -1107,32 +1147,22 @@ def _reassert_level_facts(lvl, facts: dict) -> None:
     authored value (the shell's own, or a manual edit) is never clobbered and re-runs
     stay byte-identical. The engine writes only VALUES the profile captured from the
     shell (never synthesized): ``w:numFmt@w:val`` / ``w:lvlText@w:val`` are set on the
-    existing or a freshly-created child; each ``w:ind`` attribute is set on the level's
-    ``w:pPr/w:ind`` set-only-when-unset."""
+    existing or a freshly-created child (created at its SPEC-CORRECT ``CT_Lvl``
+    position via :func:`_insert_lvl_child_ordered`); each ``w:ind`` attribute is set
+    on the level's ``w:pPr/w:ind`` set-only-when-unset."""
     numfmt = facts.get("numFmt")
     if numfmt is not None:
-        el = lvl.find(qn("w:numFmt"))
-        if el is None:
-            el = OxmlElement("w:numFmt")
-            lvl.insert(0, el)
-            el.set(qn("w:val"), str(numfmt))
-        elif el.get(qn("w:val")) is None:
+        el = _insert_lvl_child_ordered(lvl, "w:numFmt")
+        if el.get(qn("w:val")) is None:
             el.set(qn("w:val"), str(numfmt))
     lvltext = facts.get("lvlText")
     if lvltext is not None:
-        el = lvl.find(qn("w:lvlText"))
-        if el is None:
-            el = OxmlElement("w:lvlText")
-            lvl.append(el)
-            el.set(qn("w:val"), str(lvltext))
-        elif el.get(qn("w:val")) is None:
+        el = _insert_lvl_child_ordered(lvl, "w:lvlText")
+        if el.get(qn("w:val")) is None:
             el.set(qn("w:val"), str(lvltext))
     indent = facts.get("indent") or {}
     if indent:
-        ppr = lvl.find(qn("w:pPr"))
-        if ppr is None:
-            ppr = OxmlElement("w:pPr")
-            lvl.append(ppr)
+        ppr = _insert_lvl_child_ordered(lvl, "w:pPr")
         ind = ppr.find(qn("w:ind"))
         if ind is None:
             ind = OxmlElement("w:ind")

@@ -23,8 +23,13 @@ the profile resolves all of that.
 
 ```json
 {
-  "cover": { "title": "Quarterly Review", "fields": { "doc_id": "RPT-001" } },
+  "cover": {
+    "title": "Quarterly Review",
+    "subtitle": "Q2 - Revenue and delivery",
+    "fields": { "doc_id": "RPT-001", "date": "2026-06-10" }
+  },
   "blocks": [
+    { "type": "toc", "title": "Contents", "max_level": 3 },
     { "type": "heading", "level": 1, "text": "Highlights" },
     { "type": "paragraph", "text": "This paragraph resolves to the brand body style." },
     { "type": "callout", "intent": "info", "text": "The profile chooses the callout style." },
@@ -34,6 +39,20 @@ the profile resolves all of that.
 }
 ```
 
+Structural notes:
+
+- The optional top-level **`cover`** object carries named semantic slots only:
+  `title`, an optional `subtitle`, and an optional `fields` mapping of
+  key-to-value pairs (document id, date, author, ...). The profile decides where
+  and how each slot renders on the template's own cover.
+- A **`toc`** block is a table-of-contents placeholder, not content: it carries an
+  optional `title` and a `max_level` (default 3), and the engine emits a native
+  field or defers to a preserved template outline.
+- Block order in `blocks` is the author's reading order; every block resolves
+  through semantic roles, so nothing in the JSON names a style, color or font.
+
+A comprehensive worked example lives at
+[`skills/brand-docx/examples/intermediate-document.example.json`](../skills/brand-docx/examples/intermediate-document.example.json).
 PowerPoint uses the same `IntermediateDocument`; Excel uses a `GridDocument`
 (named-region fills, formulas preserved).
 

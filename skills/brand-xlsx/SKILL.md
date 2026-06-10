@@ -19,10 +19,13 @@ the workbook/model they want filled; the agent maps that request to named cells
 and named regions, invokes the internal Python engine, verifies the output, and
 returns the generated `.xlsx`.
 
-## The four verbs
+## The seven verbs: three deterministic + four model-assisted
 
 Every brand skill (`brand-docx`, `brand-pptx`, `brand-xlsx`) implements the same
-contract: **extract / comprehend / verify / generate**.
+contract. The deterministic core is **extract / verify / generate**; on top of it
+sit the optional learning verbs **comprehend / learn / propose-overrides /
+refine**, each fail-closed (the engine validates every proposal and authors every
+value).
 
 | Verb | Input | Output |
 |---|---|---|
@@ -30,6 +33,9 @@ contract: **extract / comprehend / verify / generate**.
 | **comprehend** *(optional, model-driven)* | a saved profile + a model-authored `comprehension.json` | the profile with a validated, cached `comprehension` block |
 | **verify** | a saved Brand Profile | QA findings + a verdict |
 | **generate** | data (a GridDocument) + a profile | a new on-brand `.xlsx` |
+| **learn** *(deterministic distillation)* | the profile's cross-run generation history | recurring QA findings distilled into shell-frozen overrides, advisory until `--accept` |
+| **propose-overrides** *(model-driven)* | the recurring remainder `learn` could not bind + a model-authored proposal | shell-backed corrections through the same fail-closed sink, advisory until `--accept` |
+| **refine** | end-of-generation user feedback (text or a screenshot) as a `refinement.json` delta | the existing comprehension overlaid for FUTURE generations, advisory until `--accept` |
 
 `comprehend` is **optional**: `generate` works on the deterministic profile alone.
 See [reference/comprehension.md](reference/comprehension.md) for the full step.

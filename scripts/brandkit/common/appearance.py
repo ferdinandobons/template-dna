@@ -1,27 +1,40 @@
 # SPDX-License-Identifier: MIT
-"""Format-neutral brand APPEARANCE apply orchestration (font / size / color).
+"""Format-neutral brand APPEARANCE apply orchestration (font / size / color /
+geometry / table / numbering).
 
 This is the shared control flow the per-format generators (docx and pptx today;
-xlsx in a later PR) delegate to so the "read the three axes off the resolver op,
-then brand each run only when its axis is unset" logic has exactly ONE writer
-across kinds.
+xlsx in a later PR) delegate to so the "read the appearance axes off the resolver
+op, then brand each run/paragraph only when its axis is unset" logic has exactly
+ONE writer across kinds.
 
 It is lxml / python-docx / pptx / openpyxl-FREE at import (like
-:mod:`brandkit.common.text`): the per-axis run mutations and the set-only-when-unset
-probes live behind a small BACKEND object the format adapter supplies (e.g. docx's
-``DOCX_BACKEND`` wrapping ``run.font.name``/``.size``/``.color``; pptx's
-``PPTX_BACKEND``). This module only:
+:mod:`brandkit.common.text`): the per-axis run/paragraph mutations and the
+set-only-when-unset probes live behind a small BACKEND object the format adapter
+supplies (e.g. docx's ``DOCX_BACKEND`` wrapping ``run.font.name``/``.size``/
+``.color`` and the paragraph's ``w:pPr`` geometry; pptx's ``PPTX_BACKEND``). This
+module only:
 
   1. reads the captured brand axes off the resolver op (:func:`op_latin` /
-     :func:`op_size_hp` / :func:`op_color`) - STRICTLY from ``op.appearance``, never
-     a literal in the engine, so off-brand output stays impossible by construction;
+     :func:`op_size_hp` / :func:`op_color` / :func:`op_geometry` / :func:`op_table` /
+     :func:`op_numbering`) - STRICTLY from ``op.appearance``, never a literal in the
+     engine, so off-brand output stays impossible by construction. The axes ride
+     different pathways: font/size/color are run axes applied here through the
+     backend; geometry is a paragraph axis applied here via the backend's
+     ``set_geometry`` hook (docx-only today); table and numbering are docx-only and
+     realized by dedicated writers OUTSIDE this orchestration, but declared in
+     :data:`APPEARANCE_AXES` so the parity ledger measures them;
   2. resolves a run's ``color`` palette TOKEN to its captured ref
      (:func:`resolve_run_color`), recording a graceful INFO finding for an unknown
      token (the writer never fabricates a color);
-  3. drives the backend to apply those axes (:func:`apply_role_appearance` over a
-     paragraph's runs; :func:`apply_run_color` for a single run), gating each write
-     on the backend's ``*_unset`` probe so an inherited-but-correct value is never
-     clobbered and re-runs stay byte-identical.
+  3. drives the backend to apply the run/paragraph axes
+     (:func:`apply_role_appearance` over a paragraph's runs and geometry;
+     :func:`apply_run_color` for a single run), gating each write on the backend's
+     ``*_unset`` probe so an inherited-but-correct value is never clobbered and
+     re-runs stay byte-identical;
+  4. keeps the parity ledger (Cluster E3): :func:`_record_degraded_axes` emits one
+     INFO ``appearance_apply_degraded`` finding per captured axis the format backend
+     does not declare it realizes, so an unmaterialized axis surfaces gracefully
+     instead of silently dropping.
 
 The brand guarantee is preserved end to end: every applied value comes only from
 ``op.appearance`` / the resolved palette ref, the set-only-when-unset guard is
@@ -283,15 +296,19 @@ def resolve_run_color(
 def apply_role_appearance(
     backend: AppearanceBackend, target, op, findings: list[Finding]
 ) -> None:
-    """Apply captured brand typography (font, size, color) from the resolved op as
-    direct run formatting on ``target``'s runs (hyperlink runs included for docx).
+    """Apply captured brand typography (font, size, color) and geometry from the
+    resolved op as direct run/paragraph formatting on ``target`` (hyperlink runs
+    included for docx).
 
-    The three axes are INDEPENDENT: each is applied only when the run's corresponding
+    The run axes are INDEPENDENT: each is applied only when the run's corresponding
     ``*_unset`` probe is true, so a role carrying a size but no font (or a color but
-    no font) still applies the axes it has. A target that exposes no runs (a docx
-    table here) yields nothing and is skipped. An empty appearance (a pre-capture
-    profile) returns before touching any run, so output stays byte-identical to
-    today."""
+    no font) still applies the axes it has. Geometry is a separate PARAGRAPH-level
+    axis, applied per paragraph via the backend's ``set_geometry`` hook (its
+    set-only-when-unset guard lives per PROPERTY inside the backend). Table and
+    numbering are MEASURED here by the parity ledger but realized by dedicated
+    format-specific writers elsewhere. A target that exposes no runs (a docx table
+    here) yields nothing and is skipped. An empty appearance (a pre-capture profile)
+    returns before touching any run, so output stays byte-identical to today."""
     # Parity ledger (Cluster E3): surface any captured axis this backend cannot
     # realize BEFORE the early return, so a table/numbering-only op on a format
     # without those writers is still measured. Appends findings only; it never

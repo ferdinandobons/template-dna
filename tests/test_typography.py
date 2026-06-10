@@ -1,19 +1,27 @@
 # SPDX-License-Identifier: MIT
-"""Regression tests for brand typography capture (font family, size, and color).
+"""Regression tests for brand appearance capture across the six INDEPENDENT axes
+(font / size / color / geometry / table / numbering).
 
-Covers the four layers across all three INDEPENDENT axes (font / size / color):
-  - capture: the dominant direct run font/size/color is recorded into the document
-    defaults (theme.fonts.body for font/size, theme.text.body for color) and per-role
+Covers the four layers, per axis:
+  - capture: the dominant direct value is recorded into the document defaults
+    (theme.fonts.body for font/size, theme.text.body for color, theme.geometry.body
+    for paragraph geometry, theme.table.body for table facts) and per-role
     appearance, each axis independently; a no-dominant document captures nothing;
   - resolver: a role's own captured value wins per axis; otherwise the document body
     value fills in (font for every role, but size/color ONLY for the paragraph/body
-    family, never a heading), including for a missing-role stub;
-  - apply: generated runs get the captured value as direct formatting via three
-    independent per-axis guards; a profile with NO captured typography leaves runs
-    unsized/uncolored/unfonted (no regression); re-runs stay byte-identical;
-  - verify: a size/color/font the shell does not prove it contains is an ERROR, a
-    shell-backed value is accepted, and an empty-appearance profile produces no
-    finding.
+    family, never a heading; geometry/table with NO family gate), including for a
+    missing-role stub;
+  - apply: generated runs/paragraphs get the captured value as direct formatting via
+    independent per-axis set-only-when-unset guards; a profile with NO captured
+    appearance leaves everything inherited (no regression); re-runs stay
+    byte-identical;
+  - verify: a value the shell does not prove it contains is an ERROR, a shell-backed
+    value is accepted, and an empty-appearance profile produces no finding.
+
+The run-typography trio (font / size / color) applies on all formats; geometry
+(Cluster D1), table conditional formats (Cluster D2), and numbering (Cluster D3)
+are docx-only. The D3 numbering edge cases live in test_numbering_fidelity.py;
+this file exercises the other five axes plus the shared orchestration.
 """
 
 from __future__ import annotations
