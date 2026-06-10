@@ -88,5 +88,44 @@ class ProfileMdTest(unittest.TestCase):
         self.assertIn("Never name a style, font,", text)
 
 
+class ProfileMdIntegrationTest(unittest.TestCase):
+    """Every format's extract writes the SHARED authoring sections.
+
+    Guards the integration the unit tests above cannot see: a format writer
+    that stops calling the shared renderers would silently regress its
+    PROFILE.md back to a stub.
+    """
+
+    def test_all_three_formats_render_the_shared_sections(self):
+        import os
+        import tempfile
+
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            old = Path.cwd()
+            os.chdir(td)
+            try:
+                for ext, mod in (("docx", "docx"), ("pptx", "pptx"), ("xlsx", "xlsx")):
+                    extractor = __import__(
+                        f"brandkit.formats.{mod}.extract", fromlist=["extract"]
+                    )
+                    extractor.extract(
+                        root / "examples" / "templates" / f"branddocs_template.{ext}",
+                        f"pmint-{ext}",
+                        scope="project",
+                    )
+                    md = (
+                        Path(td) / "brand-kit" / f"pmint-{ext}" / "PROFILE.md"
+                    ).read_text(encoding="utf-8")
+                    for section in (
+                        "## Roles",
+                        "## Brand palette roles",
+                        "## Authoring hints",
+                    ):
+                        self.assertIn(section, md, f"{ext}: missing {section}")
+            finally:
+                os.chdir(old)
+
+
 if __name__ == "__main__":
     unittest.main()

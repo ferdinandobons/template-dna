@@ -560,5 +560,46 @@ class OutlineTocGenerateE2ETest(unittest.TestCase):
             self.assertNotIn("bookmarkStart", self._doc_xml(out))
 
 
+class EmptyHeadingsRebuildTest(unittest.TestCase):
+    """Heading-less generation rebuilds every resolvable TOC cache EMPTY.
+
+    Regression guard for the empty-headings bare multi-paragraph span: the
+    plain begin-paragraph-only writer used to leave the template's demo
+    entries in place AND orphan the original end fldChar (malformed field
+    structure). The full span must collapse to [field-start, field-end] with
+    balanced fldChars, zero entries, zero bookmarks.
+    """
+
+    def _assert_empty_balanced(self, doc):
+        body = doc.element.body
+        text = "".join(t.text or "" for t in body.iter(w("t")))
+        self.assertNotIn("Overview", text)
+        self.assertNotIn("Scope", text)
+        kinds = [fc.get(qn("w:fldCharType")) for fc in body.iter(w("fldChar"))]
+        self.assertEqual(kinds.count("begin"), kinds.count("end"), kinds)
+        self.assertEqual(kinds, ["begin", "separate", "end"], kinds)
+        self.assertEqual(len(list(body.iter(w("bookmarkStart")))), 0)
+
+    def test_bare_multi_paragraph_span_rebuilds_empty_and_balanced(self):
+        doc = Document()
+        _multi_para_bare_toc(doc)
+        self.assertEqual(structure.refresh_visible_outline_toc_cache(doc, []), 1)
+        self._assert_empty_balanced(doc)
+
+    def test_sdt_span_rebuilds_empty_and_balanced(self):
+        doc = Document()
+        _sdt_toc(doc)
+        self.assertEqual(structure.refresh_visible_outline_toc_cache(doc, []), 1)
+        self._assert_empty_balanced(doc)
+
+    def test_empty_rebuild_is_idempotent(self):
+        doc = Document()
+        _multi_para_bare_toc(doc)
+        structure.refresh_visible_outline_toc_cache(doc, [])
+        first = etree.tostring(doc.element.body)
+        structure.refresh_visible_outline_toc_cache(doc, [])
+        self.assertEqual(first, etree.tostring(doc.element.body))
+
+
 if __name__ == "__main__":
     unittest.main()

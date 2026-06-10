@@ -29,10 +29,12 @@ the extractor produced)::
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
@@ -547,7 +549,14 @@ def write_shell_hash(directory: PathLike, shell_hash: str) -> Path:
 
 
 def _write_under(root: Path, rel: str, data: Union[bytes, str]) -> None:
-    """Write ``data`` to ``root/rel`` safely (no escaping the profile dir)."""
+    """Write ``data`` to ``root/rel`` safely (no escaping the profile dir).
+
+    ATOMIC: the payload lands in a same-directory temp file (fsynced) and is
+    moved into place with ``os.replace``. A crash, ENOSPC, or kill mid-write
+    can therefore never leave a truncated ``profile.json`` behind - the
+    blend transaction documents byte-identity-on-failure as load-bearing, and
+    a plain truncate-then-write would destroy the pre-blend profile on error.
+    """
     root_resolved = root.resolve()
     target = (root / rel).resolve()
     try:
@@ -555,10 +564,18 @@ def _write_under(root: Path, rel: str, data: Union[bytes, str]) -> None:
     except ValueError:
         raise ProfileStoreError(f"refusing to write outside profile dir: {rel!r}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(data, str):
-        target.write_text(data, encoding="utf-8")
-    else:
-        target.write_bytes(data)
+    payload = data.encode("utf-8") if isinstance(data, str) else data
+    fd, tmp_name = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 # ---------------------------------------------------------------------------

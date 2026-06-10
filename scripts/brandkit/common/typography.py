@@ -42,9 +42,47 @@ from typing import (
 )
 
 from brandkit.common import color as colorutil
+from brandkit.ooxml import names as ooxml_names
+from brandkit.ooxml import pack as ooxml_pack
 
 # The 12 canonical theme slots a palette theme-key may name (single registry).
 THEME_SLOTS: frozenset[str] = frozenset(colorutil.THEME_SLOTS)
+
+_A = ooxml_names.make_qn("a")
+
+
+def theme_font_scheme_latin(
+    template_path, theme_part: str
+) -> tuple[Optional[str], Optional[str]]:
+    """Read the major/minor latin typefaces from a package's theme part.
+
+    The format-uniform sibling of the docx extractor's theme-font read:
+    ``(major, minor)`` from ``a:fontScheme/a:majorFont|a:minorFont/a:latin
+    @typeface``, each ``None`` when the part, element, or attribute is missing,
+    or when Office wrote its ``typeface=""`` "no face here" sentinel. A missing
+    theme part is the only swallowed error (KeyError); any other parse error
+    propagates - a corrupt theme must not silently blank the captured fonts.
+    """
+    try:
+        xml = ooxml_pack.read_part(template_path, theme_part)
+    except KeyError:
+        return None, None
+    root = ooxml_pack.parse_xml_bytes(xml)
+    scheme = root.find(f".//{_A('fontScheme')}")
+    if scheme is None:
+        return None, None
+
+    def latin_of(font_tag: str) -> Optional[str]:
+        font = scheme.find(_A(font_tag))
+        if font is None:
+            return None
+        latin = font.find(_A("latin"))
+        if latin is None:
+            return None
+        return latin.get("typeface") or None
+
+    return latin_of("majorFont"), latin_of("minorFont")
+
 
 # A capture is only trusted when it is a clear convention, not noise.
 MIN_RUNS = 3  # need at least this many explicit values to call a winner

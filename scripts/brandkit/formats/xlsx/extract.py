@@ -312,12 +312,15 @@ def _theme(path: Path) -> dict:
     a ``palette_annotations`` key binds (it is not fail-closed on empty for xlsx).
     A missing theme part is swallowed (KeyError); any other parse error propagates.
     """
+    major_latin, minor_latin = common_typography.theme_font_scheme_latin(
+        path, "xl/theme/theme1.xml"
+    )
     theme = {
         "colors": _theme_colors(path),
         "palette_roles": {"primary": {"theme": "accent1"}, "text": {"theme": "dk1"}},
         "fonts": {
-            "major": {"latin": None, "fallback": "Arial"},
-            "minor": {"latin": None, "fallback": "Calibri"},
+            "major": {"latin": major_latin, "fallback": "Arial"},
+            "minor": {"latin": minor_latin, "fallback": "Calibri"},
         },
         "embedded_fonts": [],
     }

@@ -165,6 +165,49 @@ class BlendGuardsTest(unittest.TestCase):
         self.addCleanup(td.cleanup)
         self.tmp = Path(td.name)
 
+    def test_blend_rejects_a_drifted_primary_shell(self):
+        # A hand-edited / corrupted primary shell no longer proves anything:
+        # blending against it must refuse without touching profile or binaries.
+        primary = _primary(self.tmp, roles=_roles({"paragraph": _role()}))
+        shell_file = primary.shell_path
+        shell_file.write_bytes(shell_file.read_bytes() + b"tamper")
+        drifted = store.load_profile("prim", "project", cwd=self.tmp)
+        self.assertTrue(drifted.shell_drift)
+        before = _profile_bytes(drifted)
+        result = blend_mod.blend(drifted, _secondary(), b"donor", "d.docx")
+        self.assertFalse(result.ok)
+        self.assertTrue(any("drifted" in p for p in result.problems))
+        self.assertEqual(before, _profile_bytes(drifted))
+        self.assertEqual([], _blend_binaries(drifted))
+
+    def test_blend_rejects_a_missing_primary_shell(self):
+        primary = _primary(self.tmp, roles=_roles({"paragraph": _role()}))
+        primary.shell_path.unlink()
+        loaded = store.load_profile("prim", "project", cwd=self.tmp)
+        self.assertFalse(loaded.shell_exists)
+        before = _profile_bytes(loaded)
+        result = blend_mod.blend(loaded, _secondary(), b"donor", "d.docx")
+        self.assertFalse(result.ok)
+        self.assertTrue(any("missing" in p for p in result.problems))
+        self.assertEqual(before, _profile_bytes(loaded))
+        self.assertEqual([], _blend_binaries(loaded))
+
+    def test_validate_returns_problems_on_mixed_type_corroboration_list(self):
+        # schema.validate must RETURN problems on a hand-edited ledger, never
+        # raise: sorted()/set() on a mixed-type 'by' list used to TypeError.
+        primary = _primary(self.tmp, roles=_roles({"paragraph": _role()}))
+        prof = json.loads(_profile_bytes(primary))
+        prof["provenance"]["blended_shells"] = []
+        prof["blend"] = {
+            "schema_version": schema.BLEND_SCHEMA_VERSION,
+            "ledger": {
+                "filled": {},
+                "corroborated": {"roles.paragraph.appearance.font": {"by": [1, "a"]}},
+            },
+        }
+        problems = schema.validate(prof)  # must not raise
+        self.assertTrue(any("64-char hex sha256" in p for p in problems), problems)
+
     def test_blend_rejects_kind_mismatch(self):
         primary = _primary(self.tmp, roles=_roles({"paragraph": _role()}))
         before = _profile_bytes(primary)

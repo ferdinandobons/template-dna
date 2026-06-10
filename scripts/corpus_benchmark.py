@@ -232,13 +232,19 @@ def main(argv: list[str] | None = None) -> int:
     (report_dir / "report.md").write_text(md, encoding="utf-8")
     print(md)
     print(f"report written to {report_dir}")
-    failed = [
-        r
-        for r in results
-        if r.get("verify") == "failed"
-        or str(r.get("extract", "")).startswith(("rc=", "EXCEPTION"))
-        or str(r.get("generate", "")).startswith(("rc=", "EXCEPTION"))
-    ]
+
+    # A row is healthy only when every step landed in its SUCCESS vocabulary;
+    # anything else (rc=, EXCEPTION, failed, a step never reached) fails the
+    # run, so the exit code is a real fidelity gate.
+    def _row_ok(r: dict) -> bool:
+        gen = str(r.get("generate", ""))
+        return (
+            r.get("extract") == "ok"
+            and r.get("verify") == "passed"
+            and (gen == "ok" or gen.startswith("skipped"))
+        )
+
+    failed = [r for r in results if not _row_ok(r)]
     return 1 if failed else 0
 
 

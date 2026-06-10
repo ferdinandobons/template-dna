@@ -1621,8 +1621,9 @@ def _validate_blend(block: Any, profile: dict) -> list[str]:
                 if not isinstance(by, list) or not by:
                     problems.append(f"{fpath}.by: must be a non-empty list")
                     continue
-                if by != sorted(by) or len(by) != len(set(by)):
-                    problems.append(f"{fpath}.by: must be sorted and unique")
+                # Item types FIRST: sorted()/set() on a mixed or unhashable
+                # list raise, and validate() must RETURN problems, never throw.
+                typed = all(isinstance(src, str) for src in by)
                 for src in by:
                     if not isinstance(src, str) or not _SHA256_HEX_RE.match(src):
                         problems.append(
@@ -1632,6 +1633,8 @@ def _validate_blend(block: Any, profile: dict) -> list[str]:
                         problems.append(
                             f"{fpath}.by: sha {src!r} is not a recorded blended shell"
                         )
+                if typed and (by != sorted(by) or len(by) != len(set(by))):
+                    problems.append(f"{fpath}.by: must be sorted and unique")
     return problems
 
 

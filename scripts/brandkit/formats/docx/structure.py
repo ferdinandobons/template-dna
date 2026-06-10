@@ -1374,17 +1374,27 @@ def refresh_visible_outline_toc_cache(
     # AND at least one field takes the rich shape AND every heading carries its
     # live generated paragraph; otherwise every plan is demoted to the plain
     # writer and zero bookmarks are authored (today's bytes exactly).
-    rich_mode = (
-        bool(headings3)
-        and any(p["rich"] for p in plans)
-        and all(_is_live_paragraph(para, doc) for _, _, para in headings3)
-    )
-    if rich_mode:
-        bookmark_names = _author_heading_bookmarks(doc, headings3)
+    if headings3:
+        rich_mode = any(p["rich"] for p in plans) and all(
+            _is_live_paragraph(para, doc) for _, _, para in headings3
+        )
+        if rich_mode:
+            bookmark_names = _author_heading_bookmarks(doc, headings3)
+        else:
+            bookmark_names = []
+            for plan in plans:
+                plan["rich"] = False
     else:
+        # Heading-less generation: rebuild every RESOLVABLE cache empty. A
+        # span-resolved bare-paragraph plan keeps its rich splice so the FULL
+        # span collapses to [field-start, field-end] (zero entries, zero
+        # bookmarks); an UNRESOLVED bare span is left untouched, because the
+        # begin-only plain rewrite would close the field in the begin
+        # paragraph and orphan the original end fldChar (malformed XML is
+        # strictly worse than a stale cache). SDT plans rebuild empty via
+        # either writer, so they always stay in.
         bookmark_names = []
-        for plan in plans:
-            plan["rich"] = False
+        plans = [p for p in plans if p["rich"] or p["kind"] == "sdt"]
 
     # PHASE 3 - MUTATE, last-first (descending top-level position) so a
     # bare-paragraph span splice never shifts an earlier plan's body position.

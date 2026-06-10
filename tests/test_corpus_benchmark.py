@@ -26,6 +26,21 @@ class CorpusBenchmarkTest(unittest.TestCase):
         rc = corpus_benchmark.main(["--corpus", str(ROOT / "examples")])
         self.assertEqual(rc, 2)
 
+    def test_failing_template_yields_exit_1(self):
+        # A garbage "template" fails extract; the runner must aggregate that
+        # row as a failure and exit 1 (the scriptable-gate contract). Guards
+        # the predicate that also catches EXCEPTION rows on any step.
+        with tempfile.TemporaryDirectory() as td:
+            corpus = Path(td) / "corpus"
+            (corpus / "templates").mkdir(parents=True)
+            (corpus / "templates" / "broken.docx").write_bytes(b"not a zip")
+            rc = corpus_benchmark.main(["--corpus", str(corpus), "--qa", "fast"])
+            self.assertEqual(rc, 1)
+            reports = list((corpus / "reports").glob("*/report.json"))
+            self.assertEqual(len(reports), 1)
+            row = json.loads(reports[0].read_text())[0]
+            self.assertNotEqual(row.get("extract"), "ok")
+
     def test_smoke_run_on_synthetic_corpus(self):
         with tempfile.TemporaryDirectory() as td:
             corpus = Path(td) / "corpus"

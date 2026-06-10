@@ -91,6 +91,32 @@ def parse_xml_bytes(data: bytes) -> etree._Element:
 # ---------------------------------------------------------------------------
 # unpack / pack
 # ---------------------------------------------------------------------------
+# Decompression-bomb floor. No legitimate OOXML part comes anywhere close (the
+# largest real-world parts are embedded media of tens of MB), so a package
+# DECLARING a bigger inflated size is hostile and is rejected before a single
+# byte inflates. Declared sizes come from the central directory; ZipFile.read
+# itself enforces them against the actual stream.
+MAX_PART_UNCOMPRESSED = 512 * 1024 * 1024  # bytes, per part
+MAX_PACKAGE_UNCOMPRESSED = 2 * 1024 * 1024 * 1024  # bytes, whole package
+
+
+def _assert_inflation_safe(zf: zipfile.ZipFile, src: PathLike) -> None:
+    """Reject a package whose declared inflated sizes exceed the bomb floor."""
+    total = 0
+    for info in zf.infolist():
+        if info.file_size > MAX_PART_UNCOMPRESSED:
+            raise PackError(
+                f"{src}: part {info.filename!r} declares "
+                f"{info.file_size} uncompressed bytes (max {MAX_PART_UNCOMPRESSED})"
+            )
+        total += info.file_size
+        if total > MAX_PACKAGE_UNCOMPRESSED:
+            raise PackError(
+                f"{src}: package declares more than "
+                f"{MAX_PACKAGE_UNCOMPRESSED} total uncompressed bytes"
+            )
+
+
 def unpack(src: PathLike, dest_dir: PathLike, *, overwrite: bool = True) -> Path:
     """Explode an OOXML package at ``src`` into ``dest_dir``.
 
@@ -119,6 +145,7 @@ def unpack(src: PathLike, dest_dir: PathLike, *, overwrite: bool = True) -> Path
     dest_resolved = dest.resolve()
     try:
         with zipfile.ZipFile(src_path, "r") as zf:
+            _assert_inflation_safe(zf, src_path)
             for name in zf.namelist():
                 # Defend against zip-slip: reject entries that escape dest.
                 # Reject any '..' segment up front (covers backslash-style
@@ -231,6 +258,12 @@ def read_part(src: PathLike, part_name: str) -> bytes:
     name = part_name.lstrip("/")
     try:
         with zipfile.ZipFile(Path(src), "r") as zf:
+            info = zf.getinfo(name)  # KeyError when absent, same as zf.read
+            if info.file_size > MAX_PART_UNCOMPRESSED:
+                raise PackError(
+                    f"{src}: part {name!r} declares {info.file_size} "
+                    f"uncompressed bytes (max {MAX_PART_UNCOMPRESSED})"
+                )
             return zf.read(name)
     except zipfile.BadZipFile as exc:
         raise PackError(f"{src} is not a valid OOXML/ZIP package") from exc

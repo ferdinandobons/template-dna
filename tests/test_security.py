@@ -163,6 +163,49 @@ def _zip_with_entries(entries: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+class DecompressionBombTest(unittest.TestCase):
+    """A package DECLARING oversized inflated parts is rejected up front.
+
+    The limits are far above any legitimate OOXML part; the tests shrink them
+    via monkeypatch so the hostile fixture stays tiny and fast.
+    """
+
+    def setUp(self) -> None:
+        self._part = pack.MAX_PART_UNCOMPRESSED
+        self._pkg = pack.MAX_PACKAGE_UNCOMPRESSED
+        pack.MAX_PART_UNCOMPRESSED = 1024
+        pack.MAX_PACKAGE_UNCOMPRESSED = 4096
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        pack.MAX_PART_UNCOMPRESSED = self._part
+        pack.MAX_PACKAGE_UNCOMPRESSED = self._pkg
+
+    def _bomb(self, entries: dict[str, bytes]) -> Path:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        src = Path(td.name) / "bomb.zip"
+        src.write_bytes(_zip_with_entries(entries))
+        return src
+
+    def test_unpack_rejects_an_oversized_part(self) -> None:
+        src = self._bomb({"word/huge.xml": b"\0" * 2048})
+        with self.assertRaises(pack.PackError):
+            pack.unpack(src, src.parent / "dest")
+
+    def test_unpack_rejects_an_oversized_package_total(self) -> None:
+        src = self._bomb({f"part{i}.xml": b"\0" * 1000 for i in range(5)})
+        with self.assertRaises(pack.PackError):
+            pack.unpack(src, src.parent / "dest")
+
+    def test_read_part_rejects_an_oversized_part(self) -> None:
+        src = self._bomb({"word/huge.xml": b"\0" * 2048, "ok.xml": b"fine"})
+        with self.assertRaises(pack.PackError):
+            pack.read_part(src, "word/huge.xml")
+        # A small sibling part in the same package still reads fine.
+        self.assertEqual(pack.read_part(src, "ok.xml"), b"fine")
+
+
 class ZipSlipTest(unittest.TestCase):
     def _unpack_entry(self, entry_name: str) -> None:
         with tempfile.TemporaryDirectory() as td:
