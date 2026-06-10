@@ -2,7 +2,13 @@
 
 All notable changes to BrandDocs are documented in this file.
 
-## [Unreleased]
+## [0.9.0] - 2026-06-10
+
+The brand-intelligence release: derived indexes that never lie (rich TOC
+cache, empty rebuilds), multi-template profiles (`extract --blend`), the
+cross-template drift report (`compare-profiles`), a guided authoring surface,
+a local-corpus fidelity benchmark, and a 31-finding general-review hardening
+wave on top.
 
 ### Fixed
 
@@ -969,6 +975,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.9.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.9.0
 [0.8.1]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.8.1
 [0.8.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.7.0
