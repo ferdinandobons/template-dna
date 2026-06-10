@@ -15,6 +15,7 @@ brandkit/
 |  |- schema.py      FROZEN vocabulary owner (verbs, role ids, fields); 1.2.0 additive
 |  |- store.py       profile directories (./brand-kit/<name> and ~/.claude/brand-kit/<name>)
 |  |- resolver.py    THE chokepoint: the only reader of brand literals
+|  |- blend.py       multi-template blending: same-format VALUE-fact merge (fail-closed)
 |  |- comprehension.py  fail-closed single writer of the model's comprehension block
 |  |- overrides.py   learn / propose-overrides / refine (ADVISORY until --accept)
 |  `- reconcile.py   reconciles preserved cover/index structures with new content
@@ -38,7 +39,7 @@ brandkit/
 
 | Verb | Path through the engine |
 |---|---|
-| `extract` | `formats/<kind>/extract` reads the template -> `profile/store` writes profile + frozen shell + `PROFILE.md` |
+| `extract` | `formats/<kind>/extract` reads the template -> `profile/store` writes profile + frozen shell + `PROFILE.md`; with `--blend`, folds a SECOND same-format template's value-facts into an existing profile via `profile/blend` (pointers never cross shells) |
 | `comprehend-input` | `profile/comprehension` surfaces bounded facts + excerpt for the model (read-only) |
 | `comprehend` | `profile/comprehension` validates the model JSON fail-closed and freezes it into the profile (single writer) |
 | `verify` | `qa/gate` runs deterministic checks against profile + shell |

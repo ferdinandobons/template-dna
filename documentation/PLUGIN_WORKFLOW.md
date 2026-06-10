@@ -33,7 +33,7 @@ used by those skills for deterministic work. The full verb surface:
 
 | CLI verb | Purpose |
 |---|---|
-| `extract` | template -> reusable Brand Profile (+ frozen shell + `PROFILE.md`) |
+| `extract` | template -> reusable Brand Profile (+ frozen shell + `PROFILE.md`); `--blend` folds a second same-format template's VALUE-facts into an existing profile (fill unset, corroborate agreeing, primary wins conflicts; pointers never cross shells) |
 | `comprehend-input` | surface bounded facts + excerpt for the model (read-only) |
 | `comprehend` | validate the model's comprehension fail-closed, freeze it into the profile |
 | `verify` | deterministic QA findings + verdict on a saved profile |

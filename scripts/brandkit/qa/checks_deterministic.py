@@ -194,6 +194,124 @@ def _sha256_file(path: Path, *, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def check_blend_shell_provenance(shell, profile: dict) -> list[Finding]:
+    """ERROR when a recorded SECONDARY (blend) shell no longer matches provenance.
+
+    Multi-template blending records every donor in ``provenance.blended_shells``
+    (sha256 + content-addressed path under the profile's ``template/`` dir) and
+    keys its merged value-facts' evidence on those binaries. A missing, escaping,
+    unreadable, or hash-drifted donor means that evidence is no longer auditable,
+    so each is load-bearing (ERROR) - the secondary-shell peer of
+    :func:`check_shell_provenance`. A never-blended profile (no
+    ``blended_shells``, no ``blend`` block) yields zero findings at zero cost.
+    """
+    if shell is None:
+        return []
+    findings: list[Finding] = []
+    prov = profile.get("provenance")
+    entries = prov.get("blended_shells") if isinstance(prov, dict) else None
+    if entries is not None and not isinstance(entries, list):
+        findings.append(
+            Finding(
+                "blend_shell_provenance",
+                schema.Severity.ERROR.value,
+                "provenance.blended_shells is malformed (must be a list)",
+            )
+        )
+        entries = None
+
+    # The profile root: shell is <root>/template/shell.<ext>.
+    profile_root = Path(shell).parent.parent
+    root_resolved = profile_root.resolve()
+    for entry in sorted(
+        entries or [],
+        key=lambda e: str(e.get("sha256")) if isinstance(e, dict) else "",
+    ):
+        if not isinstance(entry, dict):
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"provenance.blended_shells entry is malformed: {entry!r}",
+                )
+            )
+            continue
+        rel = entry.get("path")
+        recorded = entry.get("sha256")
+        if not isinstance(rel, str) or not rel or not isinstance(recorded, str):
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"provenance.blended_shells entry is malformed: {entry!r}",
+                )
+            )
+            continue
+        target = profile_root / rel
+        try:
+            target.resolve().relative_to(root_resolved)
+        except ValueError:
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"recorded blend shell path escapes the profile dir: {rel!r}",
+                    location=str(target),
+                )
+            )
+            continue
+        if not target.is_file():
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"recorded blend shell hash exists but shell is missing: {rel}",
+                    location=str(target),
+                )
+            )
+            continue
+        try:
+            actual = _sha256_file(target)
+        except OSError as exc:
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"could not hash blend shell {rel}: {exc}",
+                    location=str(target),
+                )
+            )
+            continue
+        if actual != recorded:
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"blend shell hash drifted: recorded {recorded}, actual {actual}",
+                    location=str(target),
+                )
+            )
+
+    # Stale-binding belt: the blend ledger must be bound to the LIVE primary
+    # shell. Unreachable through the supported flow (a re-extract rewrites
+    # profile.json wholesale), so this only fires on hand-editing - honest
+    # fail-closed rather than a silent stale ledger.
+    block = profile.get("blend")
+    if isinstance(block, dict):
+        recorded = block.get("source_shell_sha256")
+        live = ((profile.get("provenance") or {}).get("shell") or {}).get("sha256")
+        if recorded and live and recorded != live:
+            findings.append(
+                Finding(
+                    "blend_shell_provenance",
+                    schema.Severity.ERROR.value,
+                    f"blend ledger bound to primary shell {recorded} but live "
+                    f"shell is {live}",
+                )
+            )
+    return findings
+
+
 def check_resolver_targets(shell, profile: dict) -> list[Finding]:
     """Verify every role's resolver target actually exists in the ``shell``.
 

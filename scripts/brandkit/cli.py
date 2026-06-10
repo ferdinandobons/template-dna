@@ -78,6 +78,87 @@ def _discover_learn_reports(profile: dict, shell_path) -> list[dict]:
         return []
 
 
+def _extract_blend(args) -> int:
+    """The ``extract --blend`` sub-branch: merge a same-format secondary template's
+    VALUE facts into the EXISTING profile NAME.
+
+    The secondary is extracted with the EXISTING per-format extractor into a
+    TEMPORARY profile (``cwd=`` temp dir, never persisted), then merged at the
+    profile level by ``profile/blend.py`` (fail-closed, all-or-nothing). Without
+    ``--blend`` the extract verb is untouched (a full re-extract).
+    """
+    import tempfile
+
+    from brandkit.profile import blend as blend_mod
+
+    # 1. The profile must already exist (blend never creates one).
+    try:
+        loaded = store.load_profile(args.name, args.scope)
+    except store.ProfileNotFoundError:
+        print(
+            f"ERROR extract --blend: no existing profile {args.name!r}; "
+            "run extract without --blend first"
+        )
+        return 1
+    # 2. Same-format fail-fast (blend() re-checks as a finding, defense in depth).
+    template_path = Path(args.template)
+    suffix = template_path.suffix.lower().lstrip(".")
+    if suffix != loaded.kind:
+        print(
+            f"ERROR extract --blend: cannot blend a .{suffix} template into a "
+            f"{loaded.kind!r} profile; cross-format comparison is the read-only "
+            "compare-profiles verb"
+        )
+        return 1
+    # 3. Temp-dir secondary extraction with the EXISTING per-format extractor
+    #    (project-scope resolution under cwd= makes the temp profile land in
+    #    <tmp>/brand-kit/, never persisted), then the profile-level merge.
+    try:
+        secondary_bytes = template_path.read_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            if loaded.kind == "docx":
+                from brandkit.formats.docx import extract as fmt_extract
+            elif loaded.kind == "pptx":
+                from brandkit.formats.pptx import extract as fmt_extract
+            elif loaded.kind == "xlsx":
+                from brandkit.formats.xlsx import extract as fmt_extract
+            else:
+                raise ValueError(f"unsupported profile kind: {loaded.kind!r}")
+            fmt_extract.extract(
+                template_path, blend_mod.TEMP_PROFILE_NAME, scope="project", cwd=tmp
+            )
+            tmp_loaded = store.load_profile(
+                blend_mod.TEMP_PROFILE_NAME, "project", cwd=tmp
+            )
+            result = blend_mod.blend(
+                loaded, tmp_loaded.profile, secondary_bytes, template_path.name
+            )
+    except Exception as exc:
+        print(f"ERROR extract --blend: {exc}")
+        return 1
+    if not result.ok:
+        print(f"blend REJECTED ({len(result.problems)} problem(s)):")
+        for problem in result.problems:
+            print(f"  {problem}")
+        return 1
+    sha = store.sha256_bytes(secondary_bytes)
+    if result.report.noop:
+        print(f"blend {args.name}: secondary {sha[:12]} already blended; no-op")
+        return 0
+    # 4. Ordinary post-write verification re-stamp, identical to plain extract.
+    report = run_qa(None, result.profile, qa="fast", shell=loaded.shell_path)
+    result.profile["verification"]["status"] = report.verdict
+    result.profile["verification"]["roles_total"] = len(
+        schema.list_role_ids(result.profile)
+    )
+    result.profile["verification"]["roles_verified"] = result.profile["verification"][
+        "roles_total"
+    ]
+    store.write_profile_json(loaded.directory, result.profile)
+    print(blend_mod.render_report(args.name, template_path.name, sha, result.report))
+    return 0 if report.passed else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="brand-docs")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -86,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", required=True)
     p.add_argument("--template", required=True)
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
+    p.add_argument(
+        "--blend",
+        action="store_true",
+        help="merge value-facts of TEMPLATE into the EXISTING profile NAME "
+        "(same format only)",
+    )
 
     p = sub.add_parser("verify")
     p.add_argument("--name", required=True)
@@ -206,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             doctor.print_report(status)
         return 0 if doctor.required_ok(status) else 1
+    if args.cmd == "extract" and args.blend:
+        return _extract_blend(args)
     if args.cmd == "extract":
         path = Path(args.template)
         suffix = path.suffix.lower()

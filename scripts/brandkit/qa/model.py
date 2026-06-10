@@ -20,6 +20,7 @@ CHECK_REGISTRY: frozenset[str] = frozenset(
         "appearance_table_targets",
         "appearance_targets_exist",
         "audit_targets_exist",
+        "blend_shell_provenance",
         "color_token_targets_exist",
         "component_survival",
         "comprehension_targets_exist",

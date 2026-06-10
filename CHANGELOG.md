@@ -36,6 +36,22 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **Multi-template profile blending (REFLECTIONS P3, the quality-ceiling
+  lift).** `extract --name X --template second.docx --blend` folds a SECOND
+  same-format template into an existing profile at the VALUE-fact level: it
+  fills captured facts the primary left unset, corroborates agreeing facts
+  with a bounded deterministic confidence boost, and keeps the primary's value
+  on every conflict. Artifact POINTERS (style ids, layouts, anchors,
+  numbering) never cross shells: generation still opens the PRIMARY shell and
+  the resolver still membership-validates everything against it, so the brand
+  guarantee is untouched. Fail-closed all-or-nothing transaction (a rejected
+  blend leaves profile.json byte-identical), sha-deduped and idempotent
+  (re-blending the same file is a no-op), secondary shells stored
+  content-addressed next to the primary with provenance, guarded by the new
+  `blend_shell_provenance` QA check (donor tamper/drift = ERROR). Single-
+  template profiles serialize without one new key and both frozen generation
+  anchors are unmoved. Same-format only by design; cross-format stays the job
+  of `compare-profiles`.
 - **`compare-profiles`: the cross-template drift report (REFLECTIONS P3).**
   New read-only CLI verb that compares the BRAND-level facts of two saved
   profiles: theme colors per slot, theme/captured fonts, semantic palette

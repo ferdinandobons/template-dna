@@ -187,6 +187,14 @@ def run_qa(
         findings = findings + checks_deterministic.check_shell_provenance(
             shell, profile
         )
+        # The secondary (blend) shells are part of that contract too: every donor a
+        # blend merged value-facts from must still hash to its recorded sha, or the
+        # merged facts' evidence is no longer auditable. No-ops on a never-blended
+        # profile (no ``provenance.blended_shells``), so the single-template path is
+        # unaffected.
+        findings = findings + checks_deterministic.check_blend_shell_provenance(
+            shell, profile
+        )
 
     findings = findings + _run_visual_audit(
         target,

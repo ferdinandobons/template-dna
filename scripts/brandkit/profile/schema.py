@@ -55,6 +55,13 @@ COMPREHENSION_SCHEMA_VERSION: str = "comprehension-1"
 # SCHEMA_VERSION 1.2.0; stamping a shaped ``absent`` block does NOT bump the major.
 OVERRIDES_SCHEMA_VERSION: str = "overrides-1"
 
+# The multi-template BLEND ledger (top-level ``blend`` + ``provenance.blended_shells``,
+# REFLECTIONS P3) carries its own independent schema tag for the same reason. Strictly
+# additive ONLY-ON-USE: unlike comprehension/overrides there is NO stamped default -
+# a profile that never blended serializes without either key (not one new byte), and
+# only ``profile/blend.py`` ever writes them on the first successful blend.
+BLEND_SCHEMA_VERSION: str = "blend-1"
+
 
 # ---------------------------------------------------------------------------
 # Frozen enums
@@ -683,6 +690,19 @@ def validate(profile: dict) -> list[str]:
     # fail-closed ``check_override_targets`` job, not this structural validator's).
     # NEVER required.
     problems.extend(_validate_overrides((profile.get("rules") or {}).get("overrides")))
+
+    # blended-shell provenance + blend ledger (optional, additive ONLY-ON-USE -
+    # REFLECTIONS P3). Absent is fine and is the default for every never-blended
+    # profile; present must be well-shaped and internally consistent (every ledger
+    # sha a member of the recorded blended shells). Shape-only here - that the
+    # recorded secondary binaries still hash to their recorded shas is the
+    # fail-closed ``check_blend_shell_provenance`` QA check's job. NEVER required.
+    problems.extend(
+        _validate_blended_shells(
+            (prov.get("blended_shells") if isinstance(prov, dict) else None), kind
+        )
+    )
+    problems.extend(_validate_blend(profile.get("blend"), profile))
 
     # components / sections reusable-fragment registries. Each entry must be a dict
     # carrying a ``blocks`` list (the primitive template ``expand_components``
@@ -1450,6 +1470,168 @@ def _validate_overrides(overrides: Any) -> list[str]:
     if prov is not None and not isinstance(prov, dict):
         problems.append("rules.overrides.provenance: must be an object")
 
+    return problems
+
+
+# A recorded shell hash is always the full lowercase hex SHA-256.
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validate_blended_shells(entries: Any, kind: Optional[str]) -> list[str]:
+    """Validate the optional ``provenance.blended_shells`` list (absent is fine).
+
+    SHAPE-ONLY, mirroring :func:`_validate_overrides` (absent-tolerant, never
+    required): each entry must carry a single-segment ``filename``, a full
+    lowercase-hex ``sha256``, and the content-addressed ``path`` exactly
+    ``template/blend-<sha256[:12]>.<ext>`` for the profile's kind. The list must be
+    sorted by ``sha256`` with unique shas so the on-disk form is structurally
+    deterministic. It deliberately does NOT re-hash the recorded binaries - that is
+    the fail-closed ``check_blend_shell_provenance`` QA check's job.
+    """
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        return ["provenance.blended_shells: must be a list"]
+    problems: list[str] = []
+    shas: list[str] = []
+    for i, entry in enumerate(entries):
+        path = f"provenance.blended_shells[{i}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{path}: must be an object")
+            continue
+        filename = entry.get("filename")
+        if not isinstance(filename, str) or not filename:
+            problems.append(f"{path}.filename: required non-empty string")
+        elif "/" in filename or "\\" in filename:
+            problems.append(
+                f"{path}.filename: must be a single path segment, got {filename!r}"
+            )
+        sha = entry.get("sha256")
+        if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+            problems.append(
+                f"{path}.sha256: required 64-char lowercase hex sha256, got {sha!r}"
+            )
+            sha = None
+        else:
+            shas.append(sha)
+        rel = entry.get("path")
+        if sha is not None and kind in KIND_EXTENSION:
+            want = f"template/blend-{sha[:12]}.{KIND_EXTENSION[kind]}"
+            if rel != want:
+                problems.append(f"{path}.path: must be {want!r}, got {rel!r}")
+        elif not isinstance(rel, str) or not rel:
+            problems.append(f"{path}.path: required non-empty string")
+    if shas != sorted(shas):
+        problems.append("provenance.blended_shells: entries must be sorted by sha256")
+    if len(shas) != len(set(shas)):
+        problems.append("provenance.blended_shells: sha256 values must be unique")
+    return problems
+
+
+def _validate_blend(block: Any, profile: dict) -> list[str]:
+    """Validate the optional top-level ``blend`` ledger (absent is fine).
+
+    SHAPE-ONLY plus ONE intra-profile cross-check (the peer of
+    :func:`_validate_resolver_consistency`, no IO): every ``from``/``by`` sha the
+    ledger names must be a member of ``provenance.blended_shells`` - a ledger can
+    never cite a donor the provenance does not record. The ledger maps a dotted
+    VALUE-fact path to the donor sha(s) that filled/corroborated it; the ``filled``
+    value is ``{"from": <sha>}`` and the ``corroborated`` value is ``{"by":
+    [<sha>, ...]}`` (non-empty, sorted, unique). ``status`` reuses the closed
+    :class:`ComprehensionStatus` vocabulary (only ``present`` is ever serialized -
+    a rejected blend writes NOTHING, unlike comprehension/overrides). NEVER
+    required: a never-blended profile has no ``blend`` key and yields no problems.
+    """
+    if block is None:
+        return []
+    if not isinstance(block, dict):
+        return ["blend: must be an object"]
+    problems: list[str] = []
+
+    sv = block.get("schema_version")
+    if sv != BLEND_SCHEMA_VERSION:
+        problems.append(
+            f"blend.schema_version: must be {BLEND_SCHEMA_VERSION!r}, got {sv!r}"
+        )
+    status = block.get("status")
+    if status not in COMPREHENSION_STATUSES:
+        problems.append(
+            f"blend.status: illegal value {status!r} "
+            f"(legal: {sorted(COMPREHENSION_STATUSES)})"
+        )
+    sha = block.get("source_shell_sha256")
+    if sha is not None and not isinstance(sha, str):
+        problems.append(
+            f"blend.source_shell_sha256: must be a hex string or null, got {sha!r}"
+        )
+
+    recorded = {
+        e.get("sha256")
+        for e in (
+            ((profile.get("provenance") or {}).get("blended_shells") or [])
+            if isinstance(profile.get("provenance"), dict)
+            else []
+        )
+        if isinstance(e, dict)
+    }
+
+    ledger = block.get("ledger")
+    if not isinstance(ledger, dict):
+        problems.append("blend.ledger: required object")
+        return problems
+    extra = sorted(set(ledger) - {"filled", "corroborated"})
+    if extra:
+        problems.append(
+            f"blend.ledger: only 'filled'/'corroborated' are legal keys, found {extra}"
+        )
+
+    filled = ledger.get("filled")
+    if filled is not None:
+        if not isinstance(filled, dict):
+            problems.append("blend.ledger.filled: must be an object")
+        else:
+            for fact_path, mark in filled.items():
+                fpath = f"blend.ledger.filled.{fact_path}"
+                if not isinstance(fact_path, str) or not fact_path:
+                    problems.append(f"{fpath}: fact path must be a non-empty string")
+                if not isinstance(mark, dict) or set(mark) != {"from"}:
+                    problems.append(f"{fpath}: must be an object with only 'from'")
+                    continue
+                src = mark.get("from")
+                if not isinstance(src, str) or not _SHA256_HEX_RE.match(src):
+                    problems.append(f"{fpath}.from: must be a 64-char hex sha256")
+                elif src not in recorded:
+                    problems.append(
+                        f"{fpath}.from: sha {src!r} is not a recorded blended shell"
+                    )
+
+    corroborated = ledger.get("corroborated")
+    if corroborated is not None:
+        if not isinstance(corroborated, dict):
+            problems.append("blend.ledger.corroborated: must be an object")
+        else:
+            for fact_path, mark in corroborated.items():
+                fpath = f"blend.ledger.corroborated.{fact_path}"
+                if not isinstance(fact_path, str) or not fact_path:
+                    problems.append(f"{fpath}: fact path must be a non-empty string")
+                if not isinstance(mark, dict) or set(mark) != {"by"}:
+                    problems.append(f"{fpath}: must be an object with only 'by'")
+                    continue
+                by = mark.get("by")
+                if not isinstance(by, list) or not by:
+                    problems.append(f"{fpath}.by: must be a non-empty list")
+                    continue
+                if by != sorted(by) or len(by) != len(set(by)):
+                    problems.append(f"{fpath}.by: must be sorted and unique")
+                for src in by:
+                    if not isinstance(src, str) or not _SHA256_HEX_RE.match(src):
+                        problems.append(
+                            f"{fpath}.by: every entry must be a 64-char hex sha256"
+                        )
+                    elif src not in recorded:
+                        problems.append(
+                            f"{fpath}.by: sha {src!r} is not a recorded blended shell"
+                        )
     return problems
 
 

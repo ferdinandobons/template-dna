@@ -48,6 +48,10 @@ PROJECT_STORE_DIRNAME = "brand-kit"
 GLOBAL_STORE_SUBPATH = (".claude", "brand-kit")
 PROFILE_JSON = "profile.json"
 SHELL_HASH_FILE = "provenance.sha256"
+# Content-addressed secondary-shell namespace (multi-template blending): every
+# blended donor binary lives at ``template/blend-<sha256[:12]>.<ext>`` next to the
+# primary ``template/shell.<ext>``. Only this prefix is ever pruned.
+BLEND_SHELL_PREFIX = "blend-"
 
 
 def project_store_root(cwd: Optional[PathLike] = None) -> Path:
@@ -115,6 +119,56 @@ class LoadedProfile:
         """True iff a current, sha-bound comprehension is available (see
         :func:`comprehension_is_present`)."""
         return comprehension_is_present(self.profile)
+
+    @property
+    def blended_shells(self) -> list[dict]:
+        """A sorted copy of ``provenance.blended_shells`` (``[]`` when absent)."""
+        prov = self.profile.get("provenance")
+        entries = prov.get("blended_shells") if isinstance(prov, dict) else None
+        if not isinstance(entries, list):
+            return []
+        return sorted(
+            (dict(e) for e in entries if isinstance(e, dict)),
+            key=lambda e: str(e.get("sha256")),
+        )
+
+    def blended_shell_drift(self) -> list[str]:
+        """Re-hash every recorded secondary (blend) shell ON DEMAND.
+
+        Deliberately NOT part of :func:`load_profile` (no per-load hashing of N
+        secondaries on the generate hot path): the fail-closed QA check
+        ``check_blend_shell_provenance`` is the enforcement; this is its
+        programmatic mirror for tests/UI. Returns one problem string per
+        missing / escaping / unreadable / hash-drifted entry (``[]`` == clean).
+        """
+        problems: list[str] = []
+        root_resolved = Path(self.directory).resolve()
+        for entry in self.blended_shells:
+            rel = entry.get("path")
+            recorded = entry.get("sha256")
+            if not isinstance(rel, str) or not rel or not isinstance(recorded, str):
+                problems.append(f"provenance.blended_shells: malformed entry {entry!r}")
+                continue
+            target = Path(self.directory) / rel
+            try:
+                target.resolve().relative_to(root_resolved)
+            except ValueError:
+                problems.append(f"blend shell path escapes the profile dir: {rel!r}")
+                continue
+            if not target.is_file():
+                problems.append(f"recorded blend shell is missing: {rel}")
+                continue
+            try:
+                actual = sha256_file(target)
+            except OSError as exc:
+                problems.append(f"could not hash blend shell {rel}: {exc}")
+                continue
+            if actual != recorded:
+                problems.append(
+                    f"blend shell hash drifted: recorded {recorded}, "
+                    f"actual {actual} ({rel})"
+                )
+        return problems
 
 
 class ProfileNotFoundError(FileNotFoundError):
@@ -243,6 +297,84 @@ def overrides_are_present(profile: dict) -> bool:
         or overrides.get("number_format_swaps")
         or overrides.get("demo_clears")
     )
+
+
+def blend_is_present(profile: dict) -> bool:
+    """Return True iff the profile carries a *current, sha-bound* blend ledger.
+
+    Mirrors :func:`comprehension_is_present` one-for-one: the blend ledger counts
+    as present only when its ``status`` is ``present`` AND its
+    ``source_shell_sha256`` equals the live ``provenance.shell.sha256``. A drifted
+    primary shell (re-extract overwrites profile.json wholesale, so the ledger is
+    gone anyway) can never present a stale ledger as current.
+    """
+    block = profile.get("blend")
+    if not isinstance(block, dict):
+        return False
+    if block.get("status") != "present":
+        return False
+    recorded = block.get("source_shell_sha256")
+    live = ((profile.get("provenance") or {}).get("shell") or {}).get("sha256")
+    return bool(recorded and live and recorded == live)
+
+
+# ---------------------------------------------------------------------------
+# Secondary (blend) shell binaries - content-addressed under template/
+# ---------------------------------------------------------------------------
+def blend_shell_relpath(kind: str, sha256: str) -> str:
+    """The content-addressed relative path for a blended secondary shell.
+
+    ``template/blend-<sha256[:12]>.<ext>`` - minted from the sha (never from any
+    input filename), so a crafted donor name can never steer the write path.
+
+    Raises:
+        ValueError: if ``kind`` is not a recognized :class:`schema.Kind`.
+    """
+    if kind not in schema.KIND_EXTENSION:
+        raise ValueError(f"unknown kind {kind!r}")
+    return f"template/{BLEND_SHELL_PREFIX}{sha256[:12]}.{schema.KIND_EXTENSION[kind]}"
+
+
+def save_blend_shell(
+    directory: PathLike, kind: str, shell_bytes: bytes
+) -> tuple[str, str]:
+    """Write a blended secondary shell binary under the profile dir.
+
+    Content-addressed (same bytes -> same path, idempotent) and routed through
+    :func:`_write_under` so the containment guard applies. Returns
+    ``(relative_path, sha256)``.
+    """
+    sha = sha256_bytes(shell_bytes)
+    rel = blend_shell_relpath(kind, sha)
+    _write_under(Path(directory), rel, shell_bytes)
+    return rel, sha
+
+
+def prune_blend_shells(
+    directory: PathLike, kind: str, keep_sha256s: set[str]
+) -> list[str]:
+    """Remove blend-shell binaries not referenced by ``keep_sha256s``.
+
+    Only the ``template/blend-*`` namespace is ever touched (the primary shell and
+    user files are structurally out of reach). Returns the removed relative paths,
+    sorted. Unknown ``kind`` raises like :func:`blend_shell_relpath`.
+    """
+    if kind not in schema.KIND_EXTENSION:
+        raise ValueError(f"unknown kind {kind!r}")
+    ext = schema.KIND_EXTENSION[kind]
+    root = Path(directory)
+    keep_prefixes = {s[:12] for s in keep_sha256s}
+    removed: list[str] = []
+    for path in (root / "template").glob(f"{BLEND_SHELL_PREFIX}*.{ext}"):
+        stem = path.name[len(BLEND_SHELL_PREFIX) : -(len(ext) + 1)]
+        if stem in keep_prefixes:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed.append(f"template/{path.name}")
+    return sorted(removed)
 
 
 # ---------------------------------------------------------------------------
