@@ -36,6 +36,16 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **Local-corpus fidelity benchmark (REFLECTIONS P3).** New
+  `scripts/corpus_benchmark.py` walks a corpus of REAL templates that lives
+  outside the repository (and refuses one inside it), runs
+  extract -> verify -> brand-agnostic probe generate -> QA per template in a
+  throwaway directory, and writes a dated `report.{md,json}` next to the
+  corpus with the LibreOffice-vs-Word caveat stated in the header. The probe
+  input is typed blocks only (no styles, colors, fonts), so the corpus
+  measures the engine without ever tuning it; `documentation/DEVELOPMENT.md`
+  documents the layout. CI smokes the runner on the synthetic example
+  template.
 - **Authoring intelligence for the IntermediateDocument/GridDocument
   (REFLECTIONS P3).** The least-guarded stage (what the authoring agent puts
   IN the input) now has a guided surface: PROFILE.md gains three

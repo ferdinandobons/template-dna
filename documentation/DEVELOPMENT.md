@@ -26,6 +26,31 @@ vocabulary in [`CONVENTIONS.md`](../CONVENTIONS.md), and the engine internals
 map in [`scripts/brandkit/README.md`](../scripts/brandkit/README.md) before
 opening a PR.
 
+## Fidelity corpus (local-only)
+
+Real company templates never enter the repo, but fidelity should be measured
+against them. Keep a corpus directory OUTSIDE the repository:
+
+```text
+~/my-branddocs-corpus/
+|- templates/   your real .docx / .pptx / .xlsx files (never committed)
+`- reports/     written by the runner, dated
+```
+
+Run the benchmark from the repo root; it extracts each template into a
+throwaway directory, verifies, generates a brand-agnostic probe document
+(docx/pptx), runs QA, and writes `reports/<date>/report.{md,json}` next to the
+corpus. Exit 1 when any template fails a step.
+
+```bash
+python scripts/corpus_benchmark.py --corpus ~/my-branddocs-corpus [--qa auto]
+```
+
+The probe input is brand-agnostic by construction (typed blocks, no styles or
+colors), so the corpus measures the engine without ever tuning it. The report
+header states the renderer caveat: visual QA certifies faithfulness according
+to LibreOffice; Word may differ on field caches and font fallback.
+
 ## Release checklist
 
 Releases are maintainer-driven and cumulative: push to `main` freely, tag only
