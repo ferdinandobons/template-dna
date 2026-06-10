@@ -94,6 +94,30 @@ to mimic a specific workbook piece. It records OOXML parts, named ranges,
 formulas, sheet dimensions, table names, merged cells, row/column sizing, cell
 styles, and number formats.
 
+## Authoring the GridDocument
+
+The Grid is where "correct workbook" becomes "great workbook". Author it
+region-first, against the profile, never cell-address-first:
+
+1. **Read `brand-kit/<name>/PROFILE.md` before writing a fill.** It lists the
+   named-region roles, the brand cell styles, and the palette tokens. Address
+   content to NAMED regions from that table; the engine fills the template's
+   real ranges.
+2. **Respect region bounds.** Size data to the region; when real data
+   overflows, split it or ask the user to grow the template range instead of
+   spilling into unnamed cells.
+3. **Formulas are content, not output.** Never paste a computed value where
+   the template keeps a formula: the engine preserves formulas, and QA fails
+   the build if one is lost.
+4. **Numbers carry the brand too.** Use the captured `number.<family>` roles
+   (currency, percent, date, ...) for masks; never invent a format string.
+5. **Color discipline.** Brand cell styles already carry the look: the default
+   is NO direct color. For true emphasis, reference a palette role or a theme
+   slot, never a hex.
+6. **Never name a style, font, or hex.** If a fill needs something the role
+   table cannot express, say so in the QA summary instead of inventing
+   formatting: the resolver is the only author of values.
+
 ## Feedback (end of generation)
 
 Ask for feedback **only after** you have returned the generated `.xlsx` and its

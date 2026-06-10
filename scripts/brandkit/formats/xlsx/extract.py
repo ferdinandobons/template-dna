@@ -19,7 +19,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from brandkit.common import color
+from brandkit.common import color, profilemd
 from brandkit.common import typography as common_typography
 from brandkit.formats import catalog
 from brandkit.formats.xlsx import structure as xlsx_structure
@@ -339,6 +339,12 @@ def _theme_colors(path: Path) -> dict:
 
 
 def _profile_md(profile: dict) -> str:
-    return (
-        "# Brand Profile: " + profile["identity"]["display_name"] + "\n\n- kind: xlsx\n"
-    )
+    lines = [
+        "# Brand Profile: " + profile["identity"]["display_name"],
+        "",
+        "- kind: xlsx",
+    ]
+    lines.extend(profilemd.roles_md(profile))
+    lines.extend(profilemd.palette_roles_md(profile))
+    lines.extend(profilemd.authoring_hints_md(profile))
+    return "\n".join(lines) + "\n"

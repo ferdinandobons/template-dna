@@ -93,6 +93,33 @@ Before generation, inspect `profile.json.artifact_catalog` when the user asks
 to mimic a specific template piece. It records OOXML parts, media parts, slide
 layouts, masters, placeholder geometry, slide texts, and slide size.
 
+## Authoring the IntermediateDocument
+
+The IDoc is where "correct deck" becomes "great deck". Author it role-first,
+against the profile, never layout-first:
+
+1. **Read `brand-kit/<name>/PROFILE.md` before writing a block.** It lists the
+   role table and the brand palette tokens. Choose every block by MEANING from
+   that table; the engine maps it to the template's real masters and layouts.
+2. **One idea per slide.** A slide carries one heading and a few supporting
+   blocks; split dense content across slides instead of shrinking it. Decks
+   read in seconds per slide, not minutes.
+3. **Lead with structure.** Cover fields first, an agenda where the deck keeps
+   sections, then one section heading per major topic so the template's
+   section scaffolding stays meaningful.
+4. **Prefer native objects.** `chart`, `table` (merged cells included) and
+   diagram blocks are authored NATIVELY: never describe a chart in prose or
+   paste it as an image when a native block exists.
+5. **Color discipline.** Placeholders inherit the brand from the layout: the
+   default is NO run color. For true emphasis, reference a palette role
+   (`primary`, `text`, ...) or a theme slot (`accent1`), never a hex.
+6. **Reuse before re-deriving.** When a comprehension is present, prefer its
+   `component` / `section` fragments (`comprehension.fragments` in
+   `profile.json`) with `{{slot}}` values over hand-building recurring slides.
+7. **Never name a layout, font, size, or hex.** If a block needs something the
+   role table cannot express, say so in the QA summary instead of inventing
+   formatting: the resolver is the only author of values.
+
 ## Feedback (end of generation)
 
 Ask for feedback **only after** you have returned the generated `.pptx` and its

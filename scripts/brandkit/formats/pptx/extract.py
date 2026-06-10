@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pptx import Presentation
 
-from brandkit.common import color
+from brandkit.common import color, profilemd
 from brandkit.common import typography as common_typography
 from brandkit.formats import catalog
 from brandkit.formats.pptx import structure
@@ -373,6 +373,12 @@ def _theme_colors(path: Path) -> dict:
 
 
 def _profile_md(profile: dict) -> str:
-    return (
-        "# Brand Profile: " + profile["identity"]["display_name"] + "\n\n- kind: pptx\n"
-    )
+    lines = [
+        "# Brand Profile: " + profile["identity"]["display_name"],
+        "",
+        "- kind: pptx",
+    ]
+    lines.extend(profilemd.roles_md(profile))
+    lines.extend(profilemd.palette_roles_md(profile))
+    lines.extend(profilemd.authoring_hints_md(profile))
+    return "\n".join(lines) + "\n"

@@ -36,6 +36,20 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **Authoring intelligence for the IntermediateDocument/GridDocument
+  (REFLECTIONS P3).** The least-guarded stage (what the authoring agent puts
+  IN the input) now has a guided surface: PROFILE.md gains three
+  format-uniform sections rendered by the new shared `common/profilemd.py`
+  (the role table on all three formats - pptx/xlsx previously shipped a
+  two-line stub - a "Brand palette roles" table naming the semantic color
+  tokens an author may reference, and "Authoring hints" that advertise
+  comprehended fragments when present); each skill's SKILL.md gains an
+  "Authoring the IntermediateDocument/GridDocument" section with role-first
+  composition rules (skeleton order, heading hierarchy the TOC regenerates
+  from, captions so derived indexes stay real, native objects on pptx, region
+  bounds and formula preservation on xlsx, color discipline, fragments before
+  re-derivation). Advisory by construction: nothing here adds engine
+  authority, the resolver remains the only author of values.
 - **Multi-template profile blending (REFLECTIONS P3, the quality-ceiling
   lift).** `extract --name X --template second.docx --blend` folds a SECOND
   same-format template into an existing profile at the VALUE-fact level: it

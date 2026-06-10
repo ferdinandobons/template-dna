@@ -8,7 +8,7 @@ from pathlib import Path
 
 from docx import Document
 
-from brandkit.common import color
+from brandkit.common import color, profilemd
 from brandkit.formats import catalog
 from brandkit.formats.docx import cover, roles, structure, typography
 from brandkit.ooxml import names, pack
@@ -296,22 +296,9 @@ def _profile_markdown(profile: dict) -> str:
         f"- verification: {profile['verification']['status']}",
     ]
     lines.extend(_structure_markdown(profile))
-    lines.extend(["", "## Roles", ""])
-    lines.append(
-        "Each role lists its concrete style and its usage (scope · placement · required)."
-    )
-    lines.append(
-        "`structural` roles belong to the ordered skeleton and must appear in their slot;"
-    )
-    lines.append("`freeform` roles are used on demand inside the freeform body region.")
-    lines.append("")
-    for rid in profile.get("roles", {}).get("_index", []):
-        entry = profile["roles"][rid]
-        resolver = entry.get("resolver", {})
-        style = resolver.get("style_name") or resolver.get("style_id")
-        usage = entry.get("usage") or {}
-        usage_str = _usage_str(usage)
-        lines.append(f"- `{rid}`: {style} ({entry.get('status')}) - {usage_str}")
+    lines.extend(profilemd.roles_md(profile))
+    lines.extend(profilemd.palette_roles_md(profile))
+    lines.extend(profilemd.authoring_hints_md(profile))
     return "\n".join(lines) + "\n"
 
 
@@ -347,14 +334,3 @@ def _structure_markdown(profile: dict) -> list[str]:
             f"(`{region.get('role')}`){flag_str} - {region.get('evidence', '')}"
         )
     return lines
-
-
-def _usage_str(usage: dict) -> str:
-    if not usage:
-        return "usage: n/a"
-    scope = usage.get("scope", "?")
-    placement = usage.get("placement", "?")
-    required = "required" if usage.get("required") else "optional"
-    order = usage.get("order")
-    order_str = f" · order={order}" if order is not None else ""
-    return f"scope={scope} · {placement} · {required}{order_str}"

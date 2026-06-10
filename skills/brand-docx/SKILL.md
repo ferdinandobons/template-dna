@@ -96,6 +96,37 @@ to mimic a specific template piece. It records OOXML parts, media parts,
 paragraph/table styles, style details, sections/margins, paragraph samples,
 and table counts.
 
+## Authoring the IntermediateDocument
+
+The IDoc is where "correct document" becomes "great document". Author it
+role-first, against the profile, never style-first:
+
+1. **Read `brand-kit/<name>/PROFILE.md` before writing a block.** It lists the
+   role table (with scope, placement, required slots), the brand palette
+   tokens, and the template's structural order. Choose every block by MEANING
+   from that table; the engine resolves it to the template's own artifacts.
+2. **Respect the skeleton.** Cover fields first (`cover.title`,
+   `cover.subtitle`, extra cover `fields`), a `toc` block only where the
+   template keeps one, then the freeform body.
+3. **Shape the body for the reader.** One `heading` level 1 per major section
+   and a real 1-2-3 hierarchy below it (the TOC regenerates from exactly these
+   headings); paragraphs of 2-5 sentences; `list` blocks for enumerations
+   (bullet for unordered, number for sequences); every `table` and `image`
+   with a `caption` block so derived indexes regenerate from real content;
+   `callout` sparingly, for genuinely load-bearing notes; `quote` only for
+   actual quotations.
+4. **Color discipline.** The named style already carries the brand: the
+   default is NO run color. When emphasis is truly needed, reference a palette
+   role (`primary`, `text`, ...) or a theme slot (`accent1`) from PROFILE.md,
+   never a hex.
+5. **Reuse before re-deriving.** When a comprehension is present, prefer its
+   `component` / `section` fragments (`comprehension.fragments` in
+   `profile.json`) with `{{slot}}` values over hand-building a recurring
+   layout.
+6. **Never name a style, font, size, or hex.** If a block needs something the
+   role table cannot express, say so in the QA summary instead of inventing
+   formatting: the resolver is the only author of values.
+
 ## Feedback (end of generation)
 
 Ask for feedback **only after** you have returned the generated `.docx` and its
