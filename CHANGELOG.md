@@ -2,6 +2,24 @@
 
 All notable changes to BrandDocs are documented in this file.
 
+## [0.10.0] - 2026-06-10
+
+Hero-image polish release.
+
+### Changed
+
+- **The README hero's three blocks are now equidistant.** The full hero
+  refresh shipped inside v0.9.0 without a changelog entry: a redesigned
+  one-to-many visual (one company template, extracted into a verified
+  hexagonal Brand Profile core, fanning out into unlimited on-brand
+  documents, with numbered extract / verify / generate steps), exported as
+  the transparent `assets/hero.webp` the README embeds plus a
+  white-flattened `assets/hero.jpg`, with `assets/hero.svg` as the editable
+  source. This release balances that composition: the template page moved
+  30 px right, the core 45 px left, and the flow curves, flying brand
+  particles and step labels were re-fit so the three blocks sit at even
+  ~250 px gaps (pixel-measured on the render).
+
 ## [0.9.0] - 2026-06-10
 
 The brand-intelligence release: derived indexes that never lie (rich TOC
@@ -975,6 +993,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.10.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.10.0
 [0.9.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.9.0
 [0.8.1]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.8.1
 [0.8.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.8.0
