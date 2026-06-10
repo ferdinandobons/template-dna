@@ -198,7 +198,7 @@ def pick_content(
 # ---------------------------------------------------------------------------
 # Cover-anchor inventory (the multi-placeholder cover; plan §4 fact inventory)
 # ---------------------------------------------------------------------------
-def inventory_cover_anchors(prs) -> list[dict]:
+def inventory_cover_anchors(prs, described: list[dict] | None = None) -> list[dict]:
     """Surface EVERY cover-layout placeholder as one anchor (multi-placeholder cover).
 
     A real cover is multi-slot: a title, a subtitle, one or more body/overlay
@@ -215,8 +215,13 @@ def inventory_cover_anchors(prs) -> list[dict]:
         {"id": "ph.0.0", "container": "placeholder", "layout": "Cover",
          "layout_idx": 0, "ph_idx": 0, "ph_type": "TITLE (1)", "family": "title",
          "placeholder": "Click to edit title"}
+
+    ``described`` optionally injects a pre-computed :func:`classify_layouts`
+    result (a pure function of the unmutated deck) so one extract pass can share
+    a single classification; ``None`` (the default) recomputes as before.
     """
-    described = classify_layouts(prs)
+    if described is None:
+        described = classify_layouts(prs)
     cover = pick_cover(described)
     if cover is None:
         return []
@@ -359,14 +364,15 @@ def _slide_is_demo(slide, prompts: set[str]) -> bool:
     return all(t in prompts for t in texts)
 
 
-def _cover_layout_names(prs) -> set[str]:
+def _cover_layout_names(prs, described: list[dict] | None = None) -> set[str]:
     """Return the set of layout names that read as a cover (title-bearing cover)."""
-    described = classify_layouts(prs)
+    if described is None:
+        described = classify_layouts(prs)
     cover = pick_cover(described)
     return {cover["name"]} if cover is not None else set()
 
 
-def classify_slides(prs) -> list[dict]:
+def classify_slides(prs, described: list[dict] | None = None) -> list[dict]:
     """Classify each slide into a region (``cover`` / ``structural`` / ``demo``).
 
     Returns one descriptor per slide (in deck order)::
@@ -381,8 +387,12 @@ def classify_slides(prs) -> list[dict]:
 
     A demo classification wins over structural but never over cover (a cover slide
     showing its own prompts is still the cover, filled in place, not cleared).
+
+    ``described`` optionally injects a pre-computed :func:`classify_layouts`
+    result (a pure function of the unmutated deck) so one extract pass can share
+    a single classification; ``None`` (the default) recomputes as before.
     """
-    cover_layouts = _cover_layout_names(prs)
+    cover_layouts = _cover_layout_names(prs, described)
     prompts = _layout_prompts(prs)
     out: list[dict] = []
     sld_ids = [sid.get("id") for sid in prs.slides._sldIdLst]
@@ -405,7 +415,7 @@ def classify_slides(prs) -> list[dict]:
     return out
 
 
-def inventory_regions(prs) -> list[dict]:
+def inventory_regions(prs, classes: list[dict] | None = None) -> list[dict]:
     """Surface the deck's region inventory (stable ids the model binds to).
 
     Combines a per-slide region id (``region.slide.<i>`` carrying its
@@ -414,10 +424,14 @@ def inventory_regions(prs) -> list[dict]:
     section list). Each entry is ``{"id": <region_ref>, "kind": <open token>}``.
 
     Deterministic and recomputable at generate time; the ids encode structural
-    positions / classifications, never brand words.
+    positions / classifications, never brand words. ``classes`` optionally
+    injects a pre-computed :func:`classify_slides` result (a pure function of
+    the unmutated deck) so one extract pass can share a single classification;
+    ``None`` (the default) recomputes as before.
     """
     out: list[dict] = []
-    classes = classify_slides(prs)
+    if classes is None:
+        classes = classify_slides(prs)
     seen_top: set[str] = set()
     for c in classes:
         out.append({"id": f"region.slide.{c['index']}", "kind": c["region"]})
@@ -433,7 +447,11 @@ def inventory_regions(prs) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Ordered skeleton (the profile["structure"] payload; peer of docx)
 # ---------------------------------------------------------------------------
-def detect_skeleton(prs) -> dict:
+def detect_skeleton(
+    prs,
+    described: list[dict] | None = None,
+    classes: list[dict] | None = None,
+) -> dict:
     """Detect the deck's ordered top-level skeleton (peer of docx detect_skeleton).
 
     Returns the ``structure`` section for ``profile.json``::
@@ -445,11 +463,18 @@ def detect_skeleton(prs) -> dict:
     cover layout exists; the sections/agenda region exists when the deck carries a
     section list; the body region is ``freeform`` (slide order inside it is not
     prescribed). ``ordered`` means the top-level region order must be respected.
+
+    ``described`` / ``classes`` optionally inject pre-computed
+    :func:`classify_layouts` / :func:`classify_slides` results (pure functions
+    of the unmutated deck) so one extract pass can share a single
+    classification; ``None`` (the default) recomputes as before.
     """
-    described = classify_layouts(prs)
+    if described is None:
+        described = classify_layouts(prs)
     has_cover = pick_cover(described) is not None
     has_sections = bool(detect_sections(prs))
-    classes = classify_slides(prs)
+    if classes is None:
+        classes = classify_slides(prs, described)
     has_body = any(c["region"] in ("structural", "demo") for c in classes)
 
     skeleton: list[dict] = []

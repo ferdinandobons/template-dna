@@ -342,16 +342,17 @@ class RendererAvailabilityTest(unittest.TestCase):
         self.assertIn("timed out", status["binary_errors"]["visual_qa"])
 
     def test_conversion_probe_smoke_tests_docx_pptx_and_xlsx(self) -> None:
-        converted_suffixes: list[str] = []
+        convert_launches: list[list[str]] = []
         rasterized_pdfs: list[str] = []
 
         def fake_run(args, *unused_args, **unused_kwargs):
             if "--convert-to" in args:
-                document = Path(args[-1])
-                converted_suffixes.append(document.suffix)
+                convert_launches.append(list(args))
                 outdir = Path(args[args.index("--outdir") + 1])
                 outdir.mkdir(parents=True, exist_ok=True)
-                (outdir / f"{document.stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+                for raw in args[args.index("--outdir") + 2 :]:
+                    document = Path(raw)
+                    (outdir / f"{document.stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
                 return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
             if args and Path(args[0]).name == "pdftoppm":
                 pdf = Path(args[-2])
@@ -368,7 +369,15 @@ class RendererAvailabilityTest(unittest.TestCase):
             )
 
         self.assertTrue(ok, error)
-        self.assertEqual({".docx", ".pptx", ".xlsx"}, set(converted_suffixes))
+        # ONE soffice launch converts all three probe documents (startup +
+        # fresh-UserInstallation cost paid once)...
+        self.assertEqual(1, len(convert_launches))
+        launch = convert_launches[0]
+        converted_suffixes = {
+            Path(raw).suffix for raw in launch[launch.index("--outdir") + 2 :]
+        }
+        self.assertEqual({".docx", ".pptx", ".xlsx"}, converted_suffixes)
+        # ...and every format's PDF is still individually rasterized.
         self.assertEqual(3, len(rasterized_pdfs))
 
     def test_conversion_probe_uses_pymupdf_when_pdftoppm_missing(self) -> None:
@@ -377,11 +386,12 @@ class RendererAvailabilityTest(unittest.TestCase):
 
         def fake_run(args, *unused_args, **unused_kwargs):
             if "--convert-to" in args:
-                document = Path(args[-1])
-                converted.append(document.suffix)
                 outdir = Path(args[args.index("--outdir") + 1])
                 outdir.mkdir(parents=True, exist_ok=True)
-                (outdir / f"{document.stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+                for raw in args[args.index("--outdir") + 2 :]:
+                    document = Path(raw)
+                    converted.append(document.suffix)
+                    (outdir / f"{document.stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
                 return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
             if args and Path(args[0]).name == "pdftoppm":
                 raise AssertionError(

@@ -52,10 +52,11 @@ VISUAL_PIPELINE_TIMEOUT_S = 45
 def probe(*, skip_visual_pipeline: bool = False) -> dict:
     """Probe required/optional dependencies and the visual render pipeline.
 
-    ``skip_visual_pipeline`` skips the slow serial soffice render smoke-test
-    (which can spawn LibreOffice up to 3x). When skipped, ``visual_qa`` is set to
-    ``None`` ("not probed") instead of running it; the binary version probes for
-    soffice/pdftoppm still run since they are cheap.
+    ``skip_visual_pipeline`` skips the slow soffice render smoke-test (one
+    headless LibreOffice launch converting all three probe documents). When
+    skipped, ``visual_qa`` is set to ``None`` ("not probed") instead of running
+    it; the binary version probes for soffice/pdftoppm still run since they are
+    cheap.
     """
     deps = {name: importlib.util.find_spec(name) is not None for name in REQUIRED}
     optional_deps = {
@@ -219,6 +220,13 @@ def _probe_visual_pipeline(
     run headless conversion in the current environment. The visual audit supports
     all three OOXML formats, so the doctor probe must prove the full render chain
     for each one instead of treating DOCX success as a proxy for PPTX/XLSX.
+
+    One soffice launch converts ALL THREE probe documents (distinct basenames,
+    one fresh UserInstallation): the per-launch process startup + profile
+    creation cost is paid once instead of three times. The verdict stays
+    fail-closed and per-format: each format's PDF must exist AND rasterize, each
+    individually checked with the same format-attributed error the serial
+    probes reported.
     """
     rasterizers = rasterizers or {
         "pdftoppm": bool(paths.get("pdftoppm")),
@@ -230,23 +238,60 @@ def _probe_visual_pipeline(
         if error:
             return False, error
 
+        pdf_dir = tmp / "pdf"
+        pdf_dir.mkdir()
+        soffice_path = paths.get("soffice") or "soffice"
+        try:
+            soffice = subprocess.run(
+                _soffice_convert_cmd(
+                    soffice_path, documents, pdf_dir, tmp / "lo-profile"
+                ),
+                capture_output=True,
+                timeout=VISUAL_PIPELINE_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, f"soffice convert failed: {exc}"
+        if soffice.returncode != 0:
+            detail = (
+                _short_output(soffice.stderr)
+                or _short_output(soffice.stdout)
+                or f"exit code {soffice.returncode}"
+            )
+            # Attribute the failure to the first format whose PDF is missing
+            # (the per-format error shape the serial probes reported) when the
+            # multi-document launch leaves one identifiable.
+            failed = next(
+                (
+                    d.suffix.lstrip(".")
+                    for d in documents
+                    if not (pdf_dir / f"{d.stem}.pdf").exists()
+                ),
+                None,
+            )
+            prefix = f"{failed} " if failed else ""
+            return False, f"{prefix}soffice convert failed: {detail}"
+
         for document in documents:
             suffix = document.suffix.lstrip(".")
-            ok, error = _probe_visual_document(
-                paths,
-                document,
-                pdf_dir=tmp / f"pdf-{suffix}",
-                png_dir=tmp / f"png-{suffix}",
-                lo_profile=tmp / f"lo-profile-{suffix}",
-                rasterizers=rasterizers,
-            )
+            pdf = pdf_dir / f"{document.stem}.pdf"
+            if not pdf.exists():
+                return False, f"{suffix} soffice convert produced no PDF"
+            png_dir = tmp / f"png-{suffix}"
+            png_dir.mkdir()
+            ok, error = _rasterize_probe_pdf(paths, pdf, png_dir, rasterizers)
             if not ok:
                 return False, f"{suffix} {error}"
     return True, None
 
 
 def _create_visual_probe_documents(tmp: Path) -> tuple[list[Path], str | None]:
-    """Create one tiny valid OOXML document for every visual-audit format."""
+    """Create one tiny valid OOXML document for every visual-audit format.
+
+    The basenames are DISTINCT (``probe-docx`` / ``probe-pptx`` / ``probe-xlsx``)
+    so a single ``soffice --convert-to pdf --outdir`` launch over all three never
+    collides on the produced ``<stem>.pdf`` names.
+    """
     try:
         from docx import Document
     except Exception as exc:
@@ -261,19 +306,19 @@ def _create_visual_probe_documents(tmp: Path) -> tuple[list[Path], str | None]:
         return [], f"cannot create probe xlsx: {exc}"
 
     try:
-        docx_path = tmp / "probe.docx"
+        docx_path = tmp / "probe-docx.docx"
         doc = Document()
         doc.add_paragraph("BrandDocs visual QA probe")
         doc.save(docx_path)
 
-        pptx_path = tmp / "probe.pptx"
+        pptx_path = tmp / "probe-pptx.pptx"
         prs = Presentation()
         slide = prs.slides.add_slide(prs.slide_layouts[0])
         if slide.shapes.title is not None:
             slide.shapes.title.text = "BrandDocs visual QA probe"
         prs.save(pptx_path)
 
-        xlsx_path = tmp / "probe.xlsx"
+        xlsx_path = tmp / "probe-xlsx.xlsx"
         wb = Workbook()
         ws = wb.active
         ws["A1"] = "BrandDocs visual QA probe"
@@ -284,53 +329,21 @@ def _create_visual_probe_documents(tmp: Path) -> tuple[list[Path], str | None]:
     return [docx_path, pptx_path, xlsx_path], None
 
 
-def _probe_visual_document(
+def _rasterize_probe_pdf(
     paths: dict[str, str | None],
-    document: Path,
-    *,
-    pdf_dir: Path,
+    pdf: Path,
     png_dir: Path,
-    lo_profile: Path,
-    rasterizers: dict[str, bool] | None = None,
+    rasterizers: dict[str, bool],
 ) -> tuple[bool, str | None]:
-    pdf_dir.mkdir()
-    png_dir.mkdir()
-
-    soffice_path = paths.get("soffice") or "soffice"
-    try:
-        soffice = subprocess.run(
-            _soffice_convert_cmd(soffice_path, document, pdf_dir, lo_profile),
-            capture_output=True,
-            timeout=VISUAL_PIPELINE_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"soffice convert failed: {exc}"
-    if soffice.returncode != 0:
-        return False, "soffice convert failed: " + (
-            _short_output(soffice.stderr)
-            or _short_output(soffice.stdout)
-            or f"exit code {soffice.returncode}"
-        )
-
-    pdfs = list(pdf_dir.glob("*.pdf"))
-    if not pdfs:
-        return False, "soffice convert produced no PDF"
-
-    rasterizers = rasterizers or {
-        "pdftoppm": bool(paths.get("pdftoppm")),
-        "fitz": False,
-    }
+    """Rasterize one probe PDF (pdftoppm first, PyMuPDF fallback), fail-closed."""
     pdftoppm_path = paths.get("pdftoppm") or "pdftoppm"
     pdftoppm_error = None
     if rasterizers.get("pdftoppm"):
-        ok, pdftoppm_error = _rasterize_pdf_with_pdftoppm(
-            pdftoppm_path, pdfs[0], png_dir
-        )
+        ok, pdftoppm_error = _rasterize_pdf_with_pdftoppm(pdftoppm_path, pdf, png_dir)
         if ok:
             return True, None
     if rasterizers.get("fitz"):
-        ok, pymupdf_error = _rasterize_pdf_with_pymupdf(pdfs[0], png_dir, dpi=50)
+        ok, pymupdf_error = _rasterize_pdf_with_pymupdf(pdf, png_dir, dpi=50)
         if ok:
             return True, None
         if pdftoppm_error:
@@ -397,11 +410,16 @@ def _rasterize_pdf_with_pymupdf(
 
 def _soffice_convert_cmd(
     soffice_path: str,
-    document: Path,
+    documents: list[Path],
     pdf_dir: Path,
     lo_profile: Path,
 ) -> list[str]:
-    """Build a headless conversion command isolated from the user's LO profile."""
+    """Build a headless conversion command isolated from the user's LO profile.
+
+    Accepts MULTIPLE input documents (distinct basenames): one launch converts
+    them all into ``pdf_dir``, paying the soffice startup + fresh
+    UserInstallation cost once.
+    """
     return [
         soffice_path,
         f"-env:UserInstallation={lo_profile.as_uri()}",
@@ -415,7 +433,7 @@ def _soffice_convert_cmd(
         "pdf",
         "--outdir",
         str(pdf_dir),
-        str(document),
+        *[str(document) for document in documents],
     ]
 
 

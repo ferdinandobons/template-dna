@@ -82,6 +82,7 @@ __all__ = [
     "capture_geometry",
     "capture_table_appearance",
     "capture_pseudo_headings",
+    "collect_font_run_facts",
     "PALETTE_WHERE",
 ]
 
@@ -197,7 +198,19 @@ def _font_run_facts(doc):
             yield _DocxRunFact(run, style_key, is_link=False)
 
 
-def capture_fonts(doc, roles: dict, theme: dict) -> None:
+def collect_font_run_facts(doc) -> list:
+    """Materialize the direct-run facts pass ONCE so extract's consumers
+    (:func:`capture_fonts` and :func:`capture_pseudo_headings`, which scans
+    twice) share a single document walk instead of re-scanning the full tree.
+
+    Pure recomputation removal: :class:`_DocxRunFact` eagerly captures all
+    consumed state at construction and the document is not mutated between the
+    passes, so iterating the materialized list yields the byte-identical votes
+    (same items, same order) as re-running the generator."""
+    return list(_font_run_facts(doc))
+
+
+def capture_fonts(doc, roles: dict, theme: dict, *, facts=None) -> None:
     """Capture dominant direct run typography (font, size, color) into ``roles``
     (per role ``appearance``) and the document defaults (``theme['fonts']['body']``
     for font/size, ``theme['text']['body']`` for color), mutating both in place.
@@ -211,14 +224,22 @@ def capture_fonts(doc, roles: dict, theme: dict) -> None:
     runs and delegates to the format-neutral
     :func:`~brandkit.common.typography.capture_appearance`; the default
     ``role_style_key`` reproduces the docx ``named_style`` OR-match byte-identically.
+
+    ``facts`` optionally injects a pre-materialized
+    :func:`collect_font_run_facts` list so one extract pass can share a single
+    document walk across consumers; ``None`` (the default) scans as before.
     """
-    _capture_appearance(_font_run_facts(doc), roles, theme)
+    _capture_appearance(
+        facts if facts is not None else _font_run_facts(doc), roles, theme
+    )
 
 
 # ---------------------------------------------------------------------------
 # Faked-heading-in-body-style detection (Cluster E2, DOCX-FIRST).
 # ---------------------------------------------------------------------------
-def _dominant_body_style_key(doc) -> Optional[tuple[Optional[str], Optional[str]]]:
+def _dominant_body_style_key(
+    doc, facts=None
+) -> Optional[tuple[Optional[str], Optional[str]]]:
     """The dominant paragraph style key across the document's body runs, or ``None``.
 
     The body/Normal style is the one the MOST body runs carry: a faked heading lives
@@ -226,9 +247,10 @@ def _dominant_body_style_key(doc) -> Optional[tuple[Optional[str], Optional[str]
     most common style key over the same direct-run pass ``capture_fonts`` samples, so
     the pseudo-heading detector compares runs the engine truly treats as body. A
     document with no styled body run yields ``None`` (the detector then keys only on
-    runs with no style of their own)."""
+    runs with no style of their own). ``facts`` optionally injects the
+    pre-materialized pass (same items, same order)."""
     counter: Counter = Counter()
-    for fact in _font_run_facts(doc):
+    for fact in facts if facts is not None else _font_run_facts(doc):
         if not (fact.text or "").strip():
             continue
         key = fact.style_key
@@ -239,7 +261,7 @@ def _dominant_body_style_key(doc) -> Optional[tuple[Optional[str], Optional[str]
     return counter.most_common(1)[0][0]
 
 
-def capture_pseudo_headings(doc, roles: dict, theme: dict) -> None:
+def capture_pseudo_headings(doc, roles: dict, theme: dict, *, facts=None) -> None:
     """Detect faked-heading-in-body-style candidates and store them additively under
     ``theme['pseudo_headings']`` (mutated in place), for the model to adjudicate via
     the ``comprehension.promote_appearance`` sink. DOCX-FIRST (Cluster E2).
@@ -260,12 +282,19 @@ def capture_pseudo_headings(doc, roles: dict, theme: dict) -> None:
     NOT wired into pptx/xlsx: a faked heading is a WordprocessingML body-paragraph
     phenomenon; pptx/xlsx carry no body-style runs, so they surface no candidates and
     stay byte-identical.
+
+    ``facts`` optionally injects the pre-materialized
+    :func:`collect_font_run_facts` list shared with :func:`capture_fonts`, so
+    the two passes here (dominant-body vote + detector) re-iterate it instead of
+    re-scanning the document; ``None`` (the default) scans as before.
     """
-    body_style_key = _dominant_body_style_key(doc)
-    facts = _detect_pseudo_headings(
-        _font_run_facts(doc), theme, body_style_key=body_style_key
+    body_style_key = _dominant_body_style_key(doc, facts)
+    detected = _detect_pseudo_headings(
+        facts if facts is not None else _font_run_facts(doc),
+        theme,
+        body_style_key=body_style_key,
     )
-    if not facts:
+    if not detected:
         return
     theme["pseudo_headings"] = [
         {
@@ -274,7 +303,7 @@ def capture_pseudo_headings(doc, roles: dict, theme: dict) -> None:
             **({"color": f.color} if f.color is not None else {}),
             "evidence": f.evidence,
         }
-        for f in facts
+        for f in detected
     ]
 
 

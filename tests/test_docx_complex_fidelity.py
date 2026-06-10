@@ -23,6 +23,7 @@ All assertions inspect the produced role registry and the real output OOXML.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -76,14 +77,33 @@ def _num_pr(p):
     )
 
 
+class _ClassScopedExtractTest(unittest.TestCase):
+    """Extract the committed complex fixture ONCE per class and hand each test a
+    deep copy (the same setUpClass pattern test_xlsx_complex_fidelity.py and
+    test_examples_kitchen_sink.py already use).
+
+    Safe by construction: the fixture is committed and immutable, extraction is
+    deterministic (guarded by tests/test_fixture_determinism.py and the
+    canonical JSON writer), and the per-test ``copy.deepcopy`` preserves
+    isolation against any in-test profile mutation."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._extract_td = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._extract_td.cleanup)
+        cls._class_profile = _extract_profile(cls._extract_td.name)
+
+    def _profile_copy(self) -> dict:
+        return copy.deepcopy(self._class_profile)
+
+
 @unittest.skipUnless(_COMPLEX_DOCX.exists(), "complex docx fixture missing")
-class DocxRoleNominationTest(unittest.TestCase):
+class DocxRoleNominationTest(_ClassScopedExtractTest):
     """The role registry promotes the PRESENT brand styles into their roles."""
 
     def setUp(self):
-        self._td = tempfile.TemporaryDirectory()
-        self.addCleanup(self._td.cleanup)
-        self.prof = _extract_profile(self._td.name)
+        self.prof = self._profile_copy()
         self.roles = self.prof["roles"]
 
     def test_callout_is_brand_style_not_builtin_footnote(self):
@@ -160,11 +180,11 @@ class DocxRoleNominationTest(unittest.TestCase):
 
 
 @unittest.skipUnless(_COMPLEX_DOCX.exists(), "complex docx fixture missing")
-class DocxListGenerationTest(unittest.TestCase):
+class DocxListGenerationTest(_ClassScopedExtractTest):
     """The generator writes real numbering onto list items keyed by item.level."""
 
     def _generate(self, idoc, td) -> Document:
-        prof = _extract_profile(td)
+        prof = self._profile_copy()
         out = Path(td) / "out.docx"
         docx_generate.generate(prof, _COMPLEX_DOCX, idoc, out)
         return Document(out)
@@ -264,7 +284,7 @@ class DocxListGenerationTest(unittest.TestCase):
     def test_list_generation_is_idempotent(self):
         # The numPr writes must be deterministic (idempotent generation).
         with tempfile.TemporaryDirectory() as td:
-            prof = _extract_profile(td)
+            prof = self._profile_copy()
             idoc = ir.IntermediateDocument(
                 blocks=[
                     ir.ListBlock(
@@ -562,7 +582,10 @@ class DocxTableD2FidelityTest(unittest.TestCase):
             self.assertIn('w:val="01E0"', xml)
             self.assertIn("AcmeTable", xml)
             self.assertIn('w:w="80"', xml)
-            report = gate.run_qa(out, prof, shell=template)
+            # The injected visual seam keeps the visual-audit branch executing in
+            # degraded mode without spawning soffice; the asserted finding is a
+            # deterministic L0 fact assembled BEFORE the visual path.
+            report = gate.run_qa(out, prof, shell=template, visual=(False, []))
             self.assertFalse(
                 any(
                     f.check == "appearance_table_targets"
@@ -573,13 +596,13 @@ class DocxTableD2FidelityTest(unittest.TestCase):
 
 
 @unittest.skipUnless(_COMPLEX_DOCX.exists(), "complex docx fixture missing")
-class DocxNumberingD3FidelityTest(unittest.TestCase):
+class DocxNumberingD3FidelityTest(_ClassScopedExtractTest):
     """D3: the template's own per-level numbering facts (numFmt / lvlText / indent) are
     captured and re-asserted onto the output's cloned w:abstractNum set-only-when-unset;
     the numbering DEFINITION stays the shell's (referenced/cloned by id, never minted)."""
 
     def _generate(self, idoc, td) -> Document:
-        prof = _extract_profile(td)
+        prof = self._profile_copy()
         out = Path(td) / "out.docx"
         docx_generate.generate(prof, _COMPLEX_DOCX, idoc, out)
         return Document(out)
@@ -661,7 +684,7 @@ class DocxNumberingD3FidelityTest(unittest.TestCase):
         # Re-generating the same content twice yields byte-identical output (the per-level
         # re-assert is set-only-when-unset, so a second run never re-touches the def).
         with tempfile.TemporaryDirectory() as td:
-            prof = _extract_profile(td)
+            prof = self._profile_copy()
             idoc = self._list_idoc()
             o1 = Path(td) / "o1.docx"
             o2 = Path(td) / "o2.docx"
@@ -676,10 +699,13 @@ class DocxNumberingD3FidelityTest(unittest.TestCase):
         from brandkit.qa import gate
 
         with tempfile.TemporaryDirectory() as td:
-            prof = _extract_profile(td)
+            prof = self._profile_copy()
             out = Path(td) / "out.docx"
             docx_generate.generate(prof, _COMPLEX_DOCX, self._list_idoc(), out)
-            report = gate.run_qa(out, prof, shell=_COMPLEX_DOCX)
+            # The injected visual seam keeps the visual-audit branch executing in
+            # degraded mode without spawning soffice; the asserted ERROR-absence is
+            # a deterministic L0 fact assembled BEFORE the visual path.
+            report = gate.run_qa(out, prof, shell=_COMPLEX_DOCX, visual=(False, []))
             self.assertFalse(
                 any(
                     f.check == "appearance_numbering_targets"
@@ -698,7 +724,7 @@ class DocxNumberingD3FidelityTest(unittest.TestCase):
         # bullet level 0, then re-generate the same content onto that edited package: the
         # authored value must survive (the per-level re-assert is set-only-when-unset).
         with tempfile.TemporaryDirectory() as td:
-            prof = _extract_profile(td)
+            prof = self._profile_copy()
             stage = Path(td) / "stage.docx"
             docx_generate.generate(prof, _COMPLEX_DOCX, self._list_idoc(), stage)
             d = Document(stage)

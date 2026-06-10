@@ -431,3 +431,65 @@ they can ship independently.
 - **Renderer-disagreement cross-check** - cut on feasibility (see section 4): one
   layout engine means `pdftoppm` vs PyMuPDF differ only in rasterization noise, not
   layout fidelity. Would need a second independent layout engine.
+
+---
+
+## 6. Performance (structural paths; profiled 2026-06-10)
+
+A profiling pass (3 independent profilers: engine, QA, test-suite) landed seven
+behavior-preserving quick wins (see CHANGELOG `[Unreleased]` / Performance:
+injected visual seam in 4 tests, single-launch 3-format doctor probe, lazy
+Office-lib imports, per-`run_qa` artifact-load memo, shared docx run-facts pass,
+shared pptx layout/slide classification, class-scoped test fixture extraction).
+Measured on the reference machine (M-series macOS, soffice + pdftoppm
+installed): full suite **59.5s -> 24.0s**, real-render lane **41.4s -> 25.2s**,
+`generate --qa auto` **8.1-8.3s -> 4.6-5.0s** per format, xlsx post-generate QA
+pass **119ms -> 32ms**, `cli.py list` **0.29s -> 0.13s**.
+
+What remains is dominated by ONE cost: every `--qa auto/deep` run pays a full
+`doctor.probe()` render smoke-test (~2.5-3.0s post-quick-wins, was ~5.6s) plus
+the real render (~1.1s, soffice startup-bound). The paths below would remove it,
+but each one is caching / semantics-adjacent, so they are documented here -
+NOT applied - until a maintainer signs off on the failure-mode tradeoffs.
+
+- **Per-process memoization of `doctor.probe()` in
+  `qa/visual.py:renderers_available()`.** Today it re-probes unconditionally on
+  every in-process `run_qa(auto)`; `_LAST_RENDERER_STATUS` and
+  `_reset_renderer_cache` already exist as the natural cache slot, and
+  `RendererAvailabilityTest.setUp` already resets it. Measured: saved ~5.9s per
+  additional in-process `run_qa(auto)` pre-quick-wins; the real-render lane runs
+  5 identical full probes in one pytest process (~26s of its 41.4s before;
+  ~10s residual after the single-launch probe). Why not applied: a renderer
+  that vanishes mid-process would be reported as `render_failed` instead of
+  `visual.unavailable` - an availability-semantics change.
+- **Cross-CLI-invocation probe cache** keyed on soffice/pdftoppm path+mtime:
+  would remove the residual probe cost from every `generate --qa auto`.
+  Motivating number: a repeat byte-identical generate still paid 8.1s
+  pre-quick-wins (~4.7s now) because `gate._l2_short_circuit` requires a
+  persisted PASS audit verdict that plain model-free CLI runs never produce.
+  Why not applied: a cache that outlives the process is exactly the class of
+  state the fail-closed rules exclude; needs an explicit invalidation design.
+- **Extend the L2 short-circuit to the model-free CLI flow** so byte-identical
+  repeat generates skip probe+render (today it only fires with persisted
+  `comprehension.audit` PASS rows). Numbers: repeat run ~4.7s vs ~0.4s of
+  actual engine work. Why not applied: widens a carefully-gated skip path.
+- **Skip the 3-format gate-time smoke probe entirely**, trusting the binary
+  version probes (0.24s) plus the degrade-clean real render: the deep-generate
+  floor would drop to ~2.7s. Why not applied: changes failure-mode findings on
+  partially-broken environments (`visual.unavailable` vs
+  `render_failed`+quicklook) - a semantics change, not an optimization.
+- **Persistent soffice listener / render daemon, parallel probe+render.** Cost
+  structure measured on this machine: each soffice launch = ~0.94s process
+  startup + ~0.80s fresh `UserInstallation` creation + ~0.15s actual conversion
+  of the real 3-page docx; one deep generate spawned 14 external processes of
+  which only ~3 did real work. A daemon violates the no-persistent-state /
+  no-platform-tricks bar today.
+- **Reuse a warm `UserInstallation` for the REAL render in `qa/visual.py`**
+  (the fresh per-render profile is a deliberate isolation choice): ~0.8s per
+  render, at the cost of shared LibreOffice state across renders.
+- **`sha256_file` recomputed 4x on the same shell per generate invocation**
+  (`store.py` load-time shell check, `qa/report.py` shell+output hashes,
+  `checks_deterministic.check_shell_provenance`): negligible at the 76KB
+  example shell (~0.1ms each) but linear in template size - worth a per-pass
+  memo (same scoping as the `run_qa` load memo) if multi-MB enterprise
+  templates become the norm.

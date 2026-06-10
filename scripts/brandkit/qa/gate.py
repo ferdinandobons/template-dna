@@ -76,99 +76,117 @@ def run_qa(
     # the brand ``shell`` for the shell-vs-output structural diffs (formula
     # preservation, component survival) that no text scan can detect; ``shell`` is
     # None at verify time and those diffs no-op on a missing file, so this is safe.
-    if target is not None and profile.get("kind") == "docx":
-        findings = checks_deterministic.check_docx(target, profile, shell=shell)
-    elif target is not None and profile.get("kind") == "pptx":
-        findings = checks_deterministic.check_pptx(target, profile, shell=shell)
-    elif target is not None and profile.get("kind") == "xlsx":
-        findings = checks_deterministic.check_xlsx(target, profile, shell=shell)
-    else:
-        findings = checks_deterministic.check_profile(profile)
+    # Per-pass artifact-load memo (see checks_deterministic.load_memo): within
+    # this block the shell/output are each opened at most once across the
+    # independent checks below; the memo dies with the block, so no loaded
+    # object or fact is ever cached across run_qa invocations (shell-frozen
+    # sha semantics still read file bytes straight from disk).
+    with checks_deterministic.load_memo():
+        if target is not None and profile.get("kind") == "docx":
+            findings = checks_deterministic.check_docx(target, profile, shell=shell)
+        elif target is not None and profile.get("kind") == "pptx":
+            findings = checks_deterministic.check_pptx(target, profile, shell=shell)
+        elif target is not None and profile.get("kind") == "xlsx":
+            findings = checks_deterministic.check_xlsx(target, profile, shell=shell)
+        else:
+            findings = checks_deterministic.check_profile(profile)
 
-    # Format-agnostic OPC integrity backstop: a generated package with duplicate
-    # ZIP part names is corrupt (Office repair dialog). No-ops at verify time / on a
-    # missing file.
-    if target is not None:
-        findings = findings + checks_deterministic.check_no_duplicate_parts(target)
+        # Format-agnostic OPC integrity backstop: a generated package with duplicate
+        # ZIP part names is corrupt (Office repair dialog). No-ops at verify time / on a
+        # missing file.
+        if target is not None:
+            findings = findings + checks_deterministic.check_no_duplicate_parts(target)
 
-    # Deterministic resolver-target existence check (opens the shell once).
-    findings = findings + checks_deterministic.check_resolver_targets(shell, profile)
-    # Shell-backed peer of resolver targets: every captured/applied font must be one
-    # the shell actually carries (fail-closed). No-op when no appearance is present.
-    findings = findings + checks_deterministic.check_appearance_targets(shell, profile)
-    # Honest fail-closed peer for the paragraph-GEOMETRY axis (Cluster D1, docx-only):
-    # every applied spacing/indent/border/shading value must be WELL-FORMED and a value
-    # the template's OWN paragraphs carried (the captured floor), never synthesized.
-    # No-op for non-docx kinds and when no geometry is captured (pre-D1 profiles).
-    findings = findings + checks_deterministic.check_geometry_targets(shell, profile)
-    # Honest fail-closed peer for the TABLE conditional-format axis (Cluster D2,
-    # docx-only): every applied tblLook bitmask must be WELL-FORMED (shape/sanity), every
-    # referenced table style must be one the shell's styles part DEFINES (symbolic
-    # name-membership, like fonts), and every cell margin must be a value the template's
-    # OWN tables carried (observed-floor, like geometry). The band fills stay in the shell
-    # style part - the engine only enables them. No-op for non-docx kinds and when no
-    # table appearance is captured (pre-D2 profiles).
-    findings = findings + checks_deterministic.check_table_targets(shell, profile)
-    # Honest fail-closed peer for the LIST / NUMBERING-definition axis (Cluster D3,
-    # docx-only): every referenced num_id / abstract_num_id must be one the shell's
-    # numbering part DEFINES (symbolic membership), every per-level numFmt must be a valid
-    # OOXML field code (shape), and every per-level lvlText / indent must be byte-identical
-    # to the shell's OWN abstractNum for that level (observed-floor, never synthesized). The
-    # numbering definition stays the shell's - the engine only references/clones it by id.
-    # No-op for non-docx kinds and when no numbering is captured (pre-D3 profiles).
-    findings = findings + checks_deterministic.check_numbering_targets(shell, profile)
-    # Fail-closed comprehension-target membership (sibling of resolver targets):
-    # every load-bearing comprehension ref must be a verbatim id from the surfaced
-    # inventories. No-ops when comprehension is absent (model-free CI path,
-    # pptx/xlsx), so it is always safe to run unconditionally here.
-    findings = findings + checks_deterministic.check_comprehension_targets(profile)
-    # Fail-closed L2 visual-AUDIT-target membership (sibling of comprehension targets,
-    # Cluster C1): every persisted ``comprehension.audit`` key must be a verbatim id
-    # from the profile's derived visual checklist; rejects-never-skips on an empty
-    # checklist. No-ops when comprehension is absent, so the model-free CI path and
-    # pptx/xlsx are unaffected.
-    findings = findings + checks_deterministic.check_audit_targets(profile)
-    # Fail-closed model-assisted QA-TRIAGE-target membership (sibling of audit
-    # targets, Cluster C2): every ``comprehension.triage`` entry must name a check in
-    # the closed eligible set and a unique (check, location) pair; rejects-never-skips
-    # a non-eligible check / duplicate. No-ops when comprehension is absent, so the
-    # model-free CI path and pptx/xlsx are unaffected. (The triage entries are CONSUMED
-    # - demoting a matched WARNING to INFO - inside ``_run_visual_audit`` via the single
-    # ``_apply_triage``, BEFORE the strict promoter and this final fold; this line only
-    # ENFORCES that every triage entry is well-formed.)
-    findings = findings + checks_deterministic.check_triage_targets(profile)
-    # Fail-closed LEARNED-override-target membership (sibling of comprehension
-    # targets, Cluster B): every reroute target / number_format mask / demo-clear
-    # value a learned lesson re-points to must be proven by this shell / captured for
-    # this template. Rejects-never-skips on an empty inventory. No-ops when overrides
-    # are absent (status != present), so the model-free CI path and pre-B3 profiles
-    # are unaffected.
-    findings = findings + checks_deterministic.check_override_targets(shell, profile)
-    # Audit visibility (Cluster B4): surface every LIVE learned override as an INFO
-    # ``override_applied`` finding so a learned re-point is never silent and verify
-    # re-surfaces it. Gated on the SAME presence+freeze predicate the resolver consumes
-    # on (``store.overrides_are_present``), so it emits iff an override branch is
-    # actually live; INFO-only, not in ``DEFAULT_L0_INVARIANTS``, so it can never flip a
-    # verdict. Reads only the profile, so it runs in both generate and verify.
-    findings = findings + checks_deterministic.check_overrides_applied(profile)
-    # Fail-closed COLOR-token membership (sibling of comprehension targets): every
-    # palette color token the comprehension/IDoc references must be a verbatim key
-    # of theme.palette. No-ops when comprehension is absent, so the model-free CI
-    # path and pre-palette profiles are unaffected.
-    findings = findings + checks_deterministic.check_color_token_targets(profile)
-    # Fail-closed PALETTE-ALIAS integrity (sibling of color-token targets, Cluster E1):
-    # every model-NAMED alias minted into theme.palette must be a legal dotted token
-    # whose ref is a byte-copy of its captured source entry's ref (the engine never
-    # authors a color). No-ops when comprehension is absent and on annotations with no
-    # alias, so the model-free CI path, pre-palette profiles, pptx/xlsx, and the
-    # no-alias byte-identity path are all unaffected.
-    findings = findings + checks_deterministic.check_palette_alias_targets(profile)
-    if extra_findings:
-        findings = findings + list(extra_findings)
+        # Deterministic resolver-target existence check (opens the shell once).
+        findings = findings + checks_deterministic.check_resolver_targets(
+            shell, profile
+        )
+        # Shell-backed peer of resolver targets: every captured/applied font must be one
+        # the shell actually carries (fail-closed). No-op when no appearance is present.
+        findings = findings + checks_deterministic.check_appearance_targets(
+            shell, profile
+        )
+        # Honest fail-closed peer for the paragraph-GEOMETRY axis (Cluster D1, docx-only):
+        # every applied spacing/indent/border/shading value must be WELL-FORMED and a value
+        # the template's OWN paragraphs carried (the captured floor), never synthesized.
+        # No-op for non-docx kinds and when no geometry is captured (pre-D1 profiles).
+        findings = findings + checks_deterministic.check_geometry_targets(
+            shell, profile
+        )
+        # Honest fail-closed peer for the TABLE conditional-format axis (Cluster D2,
+        # docx-only): every applied tblLook bitmask must be WELL-FORMED (shape/sanity), every
+        # referenced table style must be one the shell's styles part DEFINES (symbolic
+        # name-membership, like fonts), and every cell margin must be a value the template's
+        # OWN tables carried (observed-floor, like geometry). The band fills stay in the shell
+        # style part - the engine only enables them. No-op for non-docx kinds and when no
+        # table appearance is captured (pre-D2 profiles).
+        findings = findings + checks_deterministic.check_table_targets(shell, profile)
+        # Honest fail-closed peer for the LIST / NUMBERING-definition axis (Cluster D3,
+        # docx-only): every referenced num_id / abstract_num_id must be one the shell's
+        # numbering part DEFINES (symbolic membership), every per-level numFmt must be a valid
+        # OOXML field code (shape), and every per-level lvlText / indent must be byte-identical
+        # to the shell's OWN abstractNum for that level (observed-floor, never synthesized). The
+        # numbering definition stays the shell's - the engine only references/clones it by id.
+        # No-op for non-docx kinds and when no numbering is captured (pre-D3 profiles).
+        findings = findings + checks_deterministic.check_numbering_targets(
+            shell, profile
+        )
+        # Fail-closed comprehension-target membership (sibling of resolver targets):
+        # every load-bearing comprehension ref must be a verbatim id from the surfaced
+        # inventories. No-ops when comprehension is absent (model-free CI path,
+        # pptx/xlsx), so it is always safe to run unconditionally here.
+        findings = findings + checks_deterministic.check_comprehension_targets(profile)
+        # Fail-closed L2 visual-AUDIT-target membership (sibling of comprehension targets,
+        # Cluster C1): every persisted ``comprehension.audit`` key must be a verbatim id
+        # from the profile's derived visual checklist; rejects-never-skips on an empty
+        # checklist. No-ops when comprehension is absent, so the model-free CI path and
+        # pptx/xlsx are unaffected.
+        findings = findings + checks_deterministic.check_audit_targets(profile)
+        # Fail-closed model-assisted QA-TRIAGE-target membership (sibling of audit
+        # targets, Cluster C2): every ``comprehension.triage`` entry must name a check in
+        # the closed eligible set and a unique (check, location) pair; rejects-never-skips
+        # a non-eligible check / duplicate. No-ops when comprehension is absent, so the
+        # model-free CI path and pptx/xlsx are unaffected. (The triage entries are CONSUMED
+        # - demoting a matched WARNING to INFO - inside ``_run_visual_audit`` via the single
+        # ``_apply_triage``, BEFORE the strict promoter and this final fold; this line only
+        # ENFORCES that every triage entry is well-formed.)
+        findings = findings + checks_deterministic.check_triage_targets(profile)
+        # Fail-closed LEARNED-override-target membership (sibling of comprehension
+        # targets, Cluster B): every reroute target / number_format mask / demo-clear
+        # value a learned lesson re-points to must be proven by this shell / captured for
+        # this template. Rejects-never-skips on an empty inventory. No-ops when overrides
+        # are absent (status != present), so the model-free CI path and pre-B3 profiles
+        # are unaffected.
+        findings = findings + checks_deterministic.check_override_targets(
+            shell, profile
+        )
+        # Audit visibility (Cluster B4): surface every LIVE learned override as an INFO
+        # ``override_applied`` finding so a learned re-point is never silent and verify
+        # re-surfaces it. Gated on the SAME presence+freeze predicate the resolver consumes
+        # on (``store.overrides_are_present``), so it emits iff an override branch is
+        # actually live; INFO-only, not in ``DEFAULT_L0_INVARIANTS``, so it can never flip a
+        # verdict. Reads only the profile, so it runs in both generate and verify.
+        findings = findings + checks_deterministic.check_overrides_applied(profile)
+        # Fail-closed COLOR-token membership (sibling of comprehension targets): every
+        # palette color token the comprehension/IDoc references must be a verbatim key
+        # of theme.palette. No-ops when comprehension is absent, so the model-free CI
+        # path and pre-palette profiles are unaffected.
+        findings = findings + checks_deterministic.check_color_token_targets(profile)
+        # Fail-closed PALETTE-ALIAS integrity (sibling of color-token targets, Cluster E1):
+        # every model-NAMED alias minted into theme.palette must be a legal dotted token
+        # whose ref is a byte-copy of its captured source entry's ref (the engine never
+        # authors a color). No-ops when comprehension is absent and on annotations with no
+        # alias, so the model-free CI path, pre-palette profiles, pptx/xlsx, and the
+        # no-alias byte-identity path are all unaffected.
+        findings = findings + checks_deterministic.check_palette_alias_targets(profile)
+        if extra_findings:
+            findings = findings + list(extra_findings)
 
-    # The saved shell is part of the verified brand contract. If it drifted from
-    # the profile's recorded sha, verification/generation must fail closed.
-    findings = findings + checks_deterministic.check_shell_provenance(shell, profile)
+        # The saved shell is part of the verified brand contract. If it drifted from
+        # the profile's recorded sha, verification/generation must fail closed.
+        findings = findings + checks_deterministic.check_shell_provenance(
+            shell, profile
+        )
 
     findings = findings + _run_visual_audit(
         target,

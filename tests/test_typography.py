@@ -2737,7 +2737,9 @@ class GeometryTargetsCheckTest(unittest.TestCase):
             prof = self._prof({"spacing": {"before_twips": 333}})
             idoc = ir.IntermediateDocument(blocks=[ir.Paragraph(runs=[{"t": "x"}])])
             docx_generate.generate(prof, shell, idoc, out)
-            report = gate.run_qa(out, prof, shell=shell)
+            # Injected visual seam: the asserted finding is deterministic L0,
+            # assembled before the (here degraded, soffice-free) visual branch.
+            report = gate.run_qa(out, prof, shell=shell, visual=(False, []))
             self.assertTrue(
                 any(f.check == "appearance_geometry_targets" for f in report.findings)
             )
@@ -3322,7 +3324,9 @@ class TableTargetsCheckTest(unittest.TestCase):
                 ]
             )
             docx_generate.generate(prof, shell, idoc, out)
-            report = gate.run_qa(out, prof, shell=shell)
+            # Injected visual seam: the asserted finding is deterministic L0,
+            # assembled before the (here degraded, soffice-free) visual branch.
+            report = gate.run_qa(out, prof, shell=shell, visual=(False, []))
             self.assertTrue(
                 any(f.check == "appearance_table_targets" for f in report.findings)
             )

@@ -5,12 +5,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import contextmanager
 from typing import NamedTuple
 from pathlib import Path
-
-from docx import Document
-from openpyxl import load_workbook
-from pptx import Presentation
 
 from brandkit.common import color as colorutil
 from brandkit.common import text as textutil
@@ -26,6 +23,71 @@ _W = names.make_qn("w")
 # DrawingML qualified-name builder (the pptx run/theme namespace), shared with the
 # pptx appearance collector below.
 _A = names.make_qn("a")
+
+
+# ---------------------------------------------------------------------------
+# Per-run_qa artifact-load memo.
+#
+# One run_qa pass opens the SAME shell/output several times across independent
+# checks (the workbook alone was loaded up to 9x per xlsx generate). Both files
+# are immutable for the duration of one pass (the output is fully written before
+# QA starts; the shell is never written), and every check is read-only over the
+# loaded object, so loading each path at most once per pass is pure
+# recomputation removal.
+#
+# Fail-closed scoping: the memo is ``None`` by default (every standalone check
+# call loads fresh, exactly as before); ``gate.run_qa`` activates a fresh empty
+# memo for the duration of ONE pass via :func:`load_memo` and always restores
+# the previous state, so no loaded object can outlive its run_qa invocation. No
+# fact is cached across runs - the shell-provenance sha check still reads file
+# bytes straight from disk.
+#
+# The three loaders below are also the SINGLE import sites for the heavy Office
+# libs (python-docx / openpyxl / python-pptx): importing them lazily keeps every
+# CLI invocation from paying for all three when at most one format is active.
+# ---------------------------------------------------------------------------
+_LOAD_MEMO: dict | None = None
+
+
+@contextmanager
+def load_memo():
+    """Scope a fresh artifact-load memo to one ``run_qa`` pass."""
+    global _LOAD_MEMO
+    previous = _LOAD_MEMO
+    _LOAD_MEMO = {}
+    try:
+        yield
+    finally:
+        _LOAD_MEMO = previous
+
+
+def _memo_load(kind: str, path, loader):
+    if _LOAD_MEMO is None:
+        return loader(path)
+    key = (kind, str(path))
+    if key not in _LOAD_MEMO:
+        _LOAD_MEMO[key] = loader(path)
+    return _LOAD_MEMO[key]
+
+
+def _load_docx(path):
+    from docx import Document
+
+    return _memo_load("docx", path, Document)
+
+
+def _load_pptx(path):
+    from pptx import Presentation
+
+    return _memo_load("pptx", path, Presentation)
+
+
+def _load_xlsx(path):
+    # Every QA workbook read uses the SAME flags (data_only=False), so the memo
+    # never needs to key on loader options.
+    from openpyxl import load_workbook
+
+    return _memo_load("xlsx", path, lambda p: load_workbook(p, data_only=False))
 
 
 def check_profile(profile: dict) -> list[Finding]:
@@ -241,7 +303,7 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
 
 
 def _docx_style_keys(shell) -> set:
-    doc = Document(shell)
+    doc = _load_docx(shell)
     keys: set = set()
     for style in doc.styles:
         sid = getattr(style, "style_id", None)
@@ -443,7 +505,7 @@ def _xlsx_collect_appearance_facts(shell, profile: dict) -> ShellAppearanceFacts
     fonts: set[str] = {"Arial"}
     sizes: set[int] = set()
     hexes: set[str] = set()
-    wb = load_workbook(shell, data_only=False)
+    wb = _load_xlsx(shell)
     # ``wb.named_styles`` is a list of style NAMES (strings); the NamedStyle objects
     # (which carry the ``.font``) live on ``wb._named_styles``. Guard both for
     # openpyxl-version robustness - a NamedStyle font widens the allow-set.
@@ -1563,12 +1625,12 @@ def check_numbering_targets(shell, profile: dict) -> list[Finding]:
 
 
 def _pptx_layout_names(shell) -> set:
-    prs = Presentation(shell)
+    prs = _load_pptx(shell)
     return {layout.name for layout in prs.slide_layouts}
 
 
 def _xlsx_defined_names(shell) -> set:
-    wb = load_workbook(shell, data_only=False)
+    wb = _load_xlsx(shell)
     try:
         return set(wb.defined_names.keys())
     except AttributeError:
@@ -1582,7 +1644,7 @@ def _xlsx_number_format_masks(shell) -> set:
     Mirrors ``xlsx_structure.inventory_number_formats`` as a set, kept local so the
     QA layer needs no format-module import; iterates ``_cells`` (sparse-safe).
     """
-    wb = load_workbook(shell, data_only=False)
+    wb = _load_xlsx(shell)
     masks: set = set()
     for ws in wb.worksheets:
         for cell in ws._cells.values():
@@ -2313,7 +2375,7 @@ def _xlsx_formula_map(path) -> dict[str, str]:
     this O(populated) on sparse corporate models.
     """
     out: dict[str, str] = {}
-    wb = load_workbook(path, data_only=False)
+    wb = _load_xlsx(path)
     for ws in wb.worksheets:
         for cell in ws._cells.values():
             if cell.data_type == "f" and isinstance(cell.value, str):
@@ -2397,14 +2459,14 @@ def _docx_component_counts(path) -> dict[str, int]:
     # are a meaningful survival signal (a flattened table is a real defect); raw
     # list-paragraph counts are NOT compared, because docx generation rewrites the
     # body from new content, so a different list length is expected, not a loss.
-    doc = Document(path)
+    doc = _load_docx(path)
     return {"tables": len(doc.tables)}
 
 
 def _pptx_component_counts(path) -> dict[str, int]:
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-    prs = Presentation(path)
+    prs = _load_pptx(path)
     tables = charts = pictures = 0
     for slide in prs.slides:
         for shape in slide.shapes:
@@ -2418,7 +2480,7 @@ def _pptx_component_counts(path) -> dict[str, int]:
 
 
 def _xlsx_component_counts(path) -> dict[str, int]:
-    wb = load_workbook(path, data_only=False)
+    wb = _load_xlsx(path)
     tables = charts = 0
     for ws in wb.worksheets:
         try:
@@ -2490,7 +2552,7 @@ def check_component_survival(shell, output, profile: dict) -> list[Finding]:
 
 def check_docx(path, profile: dict, shell=None) -> list[Finding]:
     findings = check_profile(profile)
-    doc = Document(path)
+    doc = _load_docx(path)
     text = "\n".join(
         [p.text for p in doc.paragraphs]
         + [cell.text for t in doc.tables for row in t.rows for cell in row.cells]
@@ -2511,7 +2573,7 @@ def check_docx(path, profile: dict, shell=None) -> list[Finding]:
 
 def check_pptx(path, profile: dict, shell=None) -> list[Finding]:
     findings = check_profile(profile)
-    prs = Presentation(path)
+    prs = _load_pptx(path)
     text = "\n".join(
         shape.text
         for slide in prs.slides
@@ -2536,7 +2598,7 @@ def check_pptx(path, profile: dict, shell=None) -> list[Finding]:
 
 def check_xlsx(path, profile: dict, shell=None) -> list[Finding]:
     findings = check_profile(profile)
-    wb = load_workbook(path, data_only=False)
+    wb = _load_xlsx(path)
     cell_texts: list[str] = []
     for ws in wb.worksheets:
         for row in ws.iter_rows():

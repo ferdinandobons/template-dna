@@ -25,7 +25,13 @@ def extract(
     template_path = Path(template)
     prs = Presentation(template_path)
     layouts = _layouts(prs)
-    roles = _roles(prs, layouts)
+    # ONE layout/slide classification pass shared by every consumer below
+    # (roles, cover anchors, regions, skeleton): both are pure functions of the
+    # unmutated deck, so reusing the result is pure recomputation removal with a
+    # byte-identical profile.
+    described = structure.classify_layouts(prs)
+    classes = structure.classify_slides(prs, described)
+    roles = _roles(prs, layouts, described)
     # The pptx theme block (parsed clrScheme + the seeded palette floor). Built here
     # so the capture pass below can fold the deck's DIRECT run typography on top of
     # the seed floor before the envelope is assembled (same shape docx fills).
@@ -60,11 +66,11 @@ def extract(
     # An absent comprehension never reads them, so the deterministic path is
     # unaffected; a deck whose inventory is genuinely empty (e.g. no cover layout)
     # surfaces an empty list and a comprehension ref into it is fail-closed at QA.
-    cover_anchors = structure.inventory_cover_anchors(prs)
+    cover_anchors = structure.inventory_cover_anchors(prs, described)
     fields = structure.inventory_fields(prs)
-    regions = structure.inventory_regions(prs)
+    regions = structure.inventory_regions(prs, classes)
     sections = structure.detect_sections(prs)
-    skeleton = structure.detect_skeleton(prs)
+    skeleton = structure.detect_skeleton(prs, described, classes)
     surface = {
         "pptx": {
             "slide_size_emu": {"w": int(prs.slide_width), "h": int(prs.slide_height)},
@@ -132,15 +138,21 @@ _pick_cover = structure.pick_cover
 _pick_content = structure.pick_content
 
 
-def _roles(prs: Presentation, layouts: dict) -> dict:
+def _roles(
+    prs: Presentation, layouts: dict, described: list[dict] | None = None
+) -> dict:
     """Derive pptx roles from the REAL parsed layouts (§C3).
 
     Every emitted resolver points at an actual ``layout.name`` and an actual
     placeholder ``ph_idx`` proven to exist in that layout. When no suitable
     layout is found, the role is emitted as a ``stub`` with honest (low)
     confidence and an empty resolver target rather than a confident fiction.
+
+    ``described`` optionally injects the extract pass's shared
+    :func:`structure.classify_layouts` result; ``None`` recomputes as before.
     """
-    described = _classify_layouts(prs)
+    if described is None:
+        described = _classify_layouts(prs)
     roles: dict = {"_index": []}
 
     def add(

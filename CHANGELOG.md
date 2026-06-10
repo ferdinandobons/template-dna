@@ -4,6 +4,57 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+### Performance
+
+Seven behavior-preserving quick wins from a 3-way profiling pass (engine / QA /
+test suite). Generated document bytes, extracted profiles, and QA findings are
+byte-identical before and after (verified by byte-diffing extracted profiles and
+full QA reports for all 3 formats, plus the frozen anchor and idempotency
+tests). Numbers measured on the reference machine (M-series macOS, soffice +
+pdftoppm installed). Structural follow-ups (probe caching, render daemon, L2
+short-circuit extension) are documented - not applied - in
+`documentation/ROADMAP.md` section 6.
+
+- **Single-launch 3-format doctor render probe.** `doctor._probe_visual_pipeline`
+  now converts all three probe documents (distinct basenames) with ONE
+  `soffice --convert-to pdf` launch and one fresh `UserInstallation` instead of
+  three serial launches, keeping the fail-closed per-format assertions (each
+  format's PDF must exist AND rasterize, same format-attributed errors).
+  `doctor.probe()` 5.81s -> 3.32s; `generate --qa auto` 8.11/7.77/8.28s ->
+  4.74/4.61/5.00s (docx/pptx/xlsx); real-render test lane 41.4s -> 25.2s;
+  `doctor` CLI output bit-identical on healthy and broken environments.
+- **Per-`run_qa` artifact-load memo.** One QA pass used to reopen the same
+  shell/output via python-docx/openpyxl/python-pptx up to 9x across independent
+  checks; `gate.run_qa` now scopes a load memo (`checks_deterministic.load_memo`)
+  to a single pass so each path is loaded at most once. The memo dies with the
+  pass - nothing is cached across invocations and the shell-sha check still
+  reads bytes from disk. Post-generate QA pass: xlsx 119.1ms -> 31.9ms, docx
+  24.6ms -> 17.0ms, pptx 19.5ms -> 13.4ms.
+- **Lazy Office-lib imports in `qa/checks_deterministic.py` and `cli.py`.** The
+  three Office libs import inside the (memoized) loaders, and the six per-format
+  extract/generate modules import inside their CLI dispatch branches, so an
+  invocation pays only for the active format. `import brandkit.cli` 191ms ->
+  43ms; `cli.py list` 0.29s -> 0.13s.
+- **One materialized docx run-facts pass per extract.** `capture_fonts` and
+  `capture_pseudo_headings` (which scanned twice) now share a single
+  `collect_font_run_facts(doc)` list instead of three full document walks.
+  Warm docx extract (complex fixture) 81.1ms -> 73.1ms.
+- **Shared pptx layout/slide classification per extract.** `classify_layouts`
+  (computed 5x) and `classify_slides` (2x) are computed once in
+  `pptx/extract.py` and threaded through `_roles` / cover anchors / regions /
+  skeleton via new optional parameters (pure functions of the unmutated deck).
+  Warm pptx extract (example template) 78.3ms -> 62.9ms.
+- **Test suite: injected visual seam + class-scoped fixture extraction.** The 4
+  only suite call sites that ran `gate.run_qa` with the default `qa='auto'`
+  (and so spawned real soffice work) now pass the documented test seam
+  `visual=(False, [])`, keeping the visual-audit branch executing in degraded
+  mode (8.50/7.64/7.46/7.44s -> 0.10/0.03/0.04/0.03s); the ~17 identical
+  per-test extracts of the committed complex docx fixture are class-scoped
+  (`setUpClass` + per-test `deepcopy`, the pattern
+  `test_xlsx_complex_fidelity.py` already uses). Full suite 59.5s -> 24.0s,
+  green twice in a row; renderer-present coverage stays in `test_visual_qa.py`
+  and the opt-in `BRANDDOCS_RUN_REAL_RENDER=1` lane.
+
 ### Added
 
 - **Universal cover synthesis for `AnchorKind.NONE` (Cluster E4).** A template whose

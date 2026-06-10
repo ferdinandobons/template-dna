@@ -9,13 +9,11 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# The six per-format extract/generate modules are imported INSIDE the command
+# branches that dispatch on verb+format: only the active format's Office lib is
+# paid for per invocation (pure import deferral - the import still happens
+# before any use, so behavior and findings are unchanged).
 from brandkit import doctor
-from brandkit.formats.docx import extract as docx_extract
-from brandkit.formats.docx import generate as docx_generate
-from brandkit.formats.pptx import extract as pptx_extract
-from brandkit.formats.pptx import generate as pptx_generate
-from brandkit.formats.xlsx import extract as xlsx_extract
-from brandkit.formats.xlsx import generate as xlsx_generate
 from brandkit.grid.model import parse_grid
 from brandkit.ir.model import parse_idoc
 from brandkit.profile import comprehension as comprehension_mod
@@ -201,10 +199,16 @@ def main(argv: list[str] | None = None) -> int:
         # The bad-suffix SystemExit is a BaseException, so it is NOT swallowed here.
         try:
             if suffix == ".docx":
+                from brandkit.formats.docx import extract as docx_extract
+
                 profile_json = docx_extract.extract(path, args.name, scope=args.scope)
             elif suffix == ".pptx":
+                from brandkit.formats.pptx import extract as pptx_extract
+
                 profile_json = pptx_extract.extract(path, args.name, scope=args.scope)
             elif suffix == ".xlsx":
+                from brandkit.formats.xlsx import extract as xlsx_extract
+
                 profile_json = xlsx_extract.extract(path, args.name, scope=args.scope)
             else:
                 raise SystemExit("supported templates: .docx, .pptx, .xlsx")
@@ -245,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
         content_hash: str | None = None
         try:
             if loaded.kind == "docx":
+                from brandkit.formats.docx import generate as docx_generate
+
                 idoc = parse_idoc(data)
                 content_hash = _content_hash(idoc.to_dict())
                 out = docx_generate.generate(
@@ -255,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
                     findings=gen_findings,
                 )
             elif loaded.kind == "pptx":
+                from brandkit.formats.pptx import generate as pptx_generate
+
                 idoc = parse_idoc(data)
                 content_hash = _content_hash(idoc.to_dict())
                 out = pptx_generate.generate(
@@ -265,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
                     findings=gen_findings,
                 )
             elif loaded.kind == "xlsx":
+                from brandkit.formats.xlsx import generate as xlsx_generate
+
                 grid = parse_grid(data)
                 content_hash = _content_hash(_grid_to_dict(grid))
                 out = xlsx_generate.generate(
