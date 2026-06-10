@@ -7,5 +7,5 @@ DOCX/PPTX use an IntermediateDocument. XLSX uses a GridDocument fill manifest.
 Run from the plugin root (or set `BRAND_DOCS_ROOT` to it):
 
 ```bash
-python scripts/brandkit/cli.py generate --name <brand> --input idoc.json --output out.docx --scope auto --qa auto
+python scripts/cli.py generate --name <brand> --input idoc.json --output out.docx --scope auto --qa auto
 ```

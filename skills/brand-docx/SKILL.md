@@ -44,7 +44,8 @@ template's preserved cover/index structures with the new content. See
 
 ## Hard Rules
 
-- Treat `python scripts/brandkit/cli.py ...` as an internal engine command, not the user-facing workflow.
+- Treat `python scripts/cli.py ...` as an internal engine command, not the user-facing workflow.
+- `scripts/cli.py` is a LAUNCHER that locates the engine root by itself: it works from this skill folder AND from the repo/plugin root (set `BRAND_DOCS_ROOT` to override). Never guess deeper paths like `scripts/brandkit/...`.
 - Run the dependency preflight before starting extract / comprehend / verify / generate, and report missing or unusable dependencies before proceeding.
 - Extract opens the source template read-only and saves `brand-kit/<name>/template/shell.docx` byte-for-byte.
 - Generate opens the saved shell and resolves every semantic block through `profile.json`.
@@ -58,7 +59,7 @@ template's preserved cover/index structures with the new content. See
 Before doing any work, run:
 
 ```bash
-python scripts/brandkit/cli.py doctor
+python scripts/cli.py doctor
 ```
 
 Use its output to decide the run mode:
@@ -103,7 +104,7 @@ Turn the answer into a small refinement delta of verbatim ids and merge it with
 the `refine` verb (see [reference/comprehension.md](reference/comprehension.md)):
 
 ```bash
-python scripts/brandkit/cli.py refine --name <brand> --input refinement.json --accept
+python scripts/cli.py refine --name <brand> --input refinement.json --accept
 ```
 
 A refinement improves **FUTURE** generations of this brand only - it mutates the
@@ -121,7 +122,7 @@ as an INFO `override_applied` finding in QA.
 ## Internal Extract
 
 ```bash
-python scripts/brandkit/cli.py extract --name <brand> --template <template.docx> --scope project
+python scripts/cli.py extract --name <brand> --template <template.docx> --scope project
 ```
 
 ## Internal Comprehend (optional, model-driven)
@@ -130,8 +131,8 @@ Read [reference/comprehension.md](reference/comprehension.md) for the full
 guidance, the five questions, and the anti-overfitting directive. In short:
 
 ```bash
-python scripts/brandkit/cli.py comprehend-input --name <brand>   # prints {facts, excerpt} for the model
-python scripts/brandkit/cli.py comprehend --name <brand> --input comprehension.json  # the ONLY writer
+python scripts/cli.py comprehend-input --name <brand>   # prints {facts, excerpt} for the model
+python scripts/cli.py comprehend --name <brand> --input comprehension.json  # the ONLY writer
 ```
 
 Skip this verb when `comprehension.status` is `present` **and** its
@@ -142,7 +143,7 @@ comprehension is already cached). A re-extract resets it to `absent`; re-run
 ## Internal Verify
 
 ```bash
-python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
+python scripts/cli.py verify --name <brand> --scope auto --qa auto
 ```
 
 `--qa` selects the QA depth (see [reference/visual-audit.md](reference/visual-audit.md)):
@@ -157,7 +158,7 @@ Verify has no output to render, so all modes behave as L0 at verify time; the vi
 ## Internal Generate
 
 ```bash
-python scripts/brandkit/cli.py generate --name <brand> --input <intermediate-document.json> --output <output.docx> --scope auto --qa auto
+python scripts/cli.py generate --name <brand> --input <intermediate-document.json> --output <output.docx> --scope auto --qa auto
 ```
 
 See `reference/comprehension.md`, `reference/profile-schema.md`,

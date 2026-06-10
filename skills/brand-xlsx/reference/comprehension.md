@@ -39,10 +39,10 @@ plumbing, not a user-facing workflow.
 
 ```bash
 # 1. Print the bounded {facts, excerpt} bundle for the model to read.
-python scripts/brandkit/cli.py comprehend-input --name <brand>
+python scripts/cli.py comprehend-input --name <brand>
 
 # 2. Merge + validate + cache the model-authored comprehension.json (THE ONLY WRITER).
-python scripts/brandkit/cli.py comprehend --name <brand> --input comprehension.json
+python scripts/cli.py comprehend --name <brand> --input comprehension.json
 ```
 
 `comprehend-input` prints `{facts, excerpt}`: `facts` is the surfaced,
@@ -330,9 +330,9 @@ verb:
 
 ```bash
 # Overlay the delta onto the EXISTING comprehension, then re-validate the whole block.
-python scripts/brandkit/cli.py refine --name <brand> --input refinement.json
+python scripts/cli.py refine --name <brand> --input refinement.json
 # Add --accept to persist the refined comprehension (else the diff is previewed).
-python scripts/brandkit/cli.py refine --name <brand> --input refinement.json --accept
+python scripts/cli.py refine --name <brand> --input refinement.json --accept
 ```
 
 A refinement delta touches ONLY the existing qualitative-understanding sinks -
@@ -382,9 +382,9 @@ small overrides proposal, then merge it:
 
 ```bash
 # Overlay the proposal onto any existing lesson, then re-validate the whole block.
-python scripts/brandkit/cli.py propose-overrides --name <brand> --input overrides.json
+python scripts/cli.py propose-overrides --name <brand> --input overrides.json
 # Add --accept to make the correction LIVE (else it is written advisory-'absent').
-python scripts/brandkit/cli.py propose-overrides --name <brand> --input overrides.json --accept
+python scripts/cli.py propose-overrides --name <brand> --input overrides.json --accept
 ```
 
 A proposal may ONLY **NAME a shell-backed pointer** - never author a style, font, or

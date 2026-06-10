@@ -7,5 +7,5 @@ passing profile as accepted.
 Run from the plugin root (or set `BRAND_DOCS_ROOT` to it):
 
 ```bash
-python scripts/brandkit/cli.py verify --name <brand> --scope auto --qa auto
+python scripts/cli.py verify --name <brand> --scope auto --qa auto
 ```

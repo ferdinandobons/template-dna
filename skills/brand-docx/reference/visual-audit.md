@@ -38,7 +38,7 @@ Notes:
   fails when full render proof is unavailable or when L1/OCR findings need repair.
 - The renderer is env-detected via `doctor.probe()["visual_qa"]`, which
   smoke-tests the DOCX, PPTX, and XLSX render paths end to end; run
-  `python scripts/brandkit/cli.py doctor` before starting the workflow and report
+  `python scripts/cli.py doctor` before starting the workflow and report
   missing/unusable dependencies before claiming a full visual audit.
 - `pdftoppm` remains the baseline PDF rasterizer. If it is missing or fails after
   LibreOffice produced a PDF, optional PyMuPDF (`fitz`) can rasterize the PDF as
