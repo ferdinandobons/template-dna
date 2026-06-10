@@ -41,6 +41,7 @@ used by those skills for deterministic work. The full verb surface:
 | `learn` | distill cross-run `generation_report.json` history into an ADVISORY lesson |
 | `propose-overrides` | validate a model-authored overrides proposal (ADVISORY until accepted) |
 | `refine` | fold a model-authored refinement into the comprehension block (diff first) |
+| `compare-profiles` | read-only drift report between two saved profiles (theme colors, fonts, palette roles, off-theme hexes); exit 1 on brand-level drift |
 | `list` | enumerate saved profiles per scope |
 | `doctor` | probe the environment (deps, renderers, OCR) with repair hints |
 

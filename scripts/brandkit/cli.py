@@ -171,6 +171,21 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("list")
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
 
+    # Read-only cross-template drift report (REFLECTIONS P3): compares the
+    # BRAND-level facts of two saved profiles (theme colors, fonts, semantic
+    # palette roles, off-theme hex usage). Writes nothing; exit 1 on drift so
+    # the verb is scriptable as a brand-coherence gate.
+    p = sub.add_parser("compare-profiles")
+    p.add_argument("--name-a", required=True, help="first saved profile name")
+    p.add_argument("--name-b", required=True, help="second saved profile name")
+    p.add_argument("--scope-a", default="auto", choices=("auto", "project", "global"))
+    p.add_argument("--scope-b", default="auto", choices=("auto", "project", "global"))
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="print the structured comparison as JSON instead of the report",
+    )
+
     p = sub.add_parser("doctor")
     p.add_argument(
         "--json",
@@ -553,6 +568,17 @@ def main(argv: list[str] | None = None) -> int:
             f"{n_demo} demo-clear(s) [{state}]"
         )
         return 0
+    if args.cmd == "compare-profiles":
+        from brandkit.profile import compare
+
+        a = store.load_profile(args.name_a, args.scope_a)
+        b = store.load_profile(args.name_b, args.scope_b)
+        result = compare.compare_profiles(a.profile, b.profile)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(compare.render_report(result))
+        return 0 if result["verdict"] == compare.VERDICT_ALIGNED else 1
     if args.cmd == "list":
         for summary in store.list_profiles():
             if args.scope != "auto" and summary.scope != args.scope:

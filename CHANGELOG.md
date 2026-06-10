@@ -36,6 +36,17 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **`compare-profiles`: the cross-template drift report (REFLECTIONS P3).**
+  New read-only CLI verb that compares the BRAND-level facts of two saved
+  profiles: theme colors per slot, theme/captured fonts, semantic palette
+  roles, and off-theme usage (a raw hex in one profile that is a theme slot in
+  the other - the sharpest "one template is off-theme" signal). Structural
+  facts (styles, layouts, anchors) are never compared as drift: they are
+  per-shell by design; role coverage is reported as information only. Writes
+  nothing; exits 1 on brand-level drift so it can gate brand coherence in CI.
+  First live run immediately caught a real inconsistency between the shipped
+  docx and pptx example templates (five theme slots disagree) - queued for the
+  next example-template refresh.
 - **Contributor onramp (REFLECTIONS P1).** `CONTRIBUTING.md` expanded from a
   10-line stub to the full gate (dev setup, the three test lanes, the seven
   non-negotiable rules, PR checklist, sized first contributions);

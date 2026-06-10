@@ -9,7 +9,7 @@ contracts live in [CONVENTIONS.md](../../CONVENTIONS.md).
 
 ```text
 brandkit/
-|- cli.py            argparse entrypoint; the ten verbs (see below)
+|- cli.py            argparse entrypoint; the eleven verbs (see below)
 |- doctor.py         environment probe (deps, renderers, OCR) + repair hints
 |- profile/          the Brand Profile: the only home of brand facts
 |  |- schema.py      FROZEN vocabulary owner (verbs, role ids, fields); 1.2.0 additive
@@ -34,7 +34,7 @@ brandkit/
 
 ## The verbs and their call paths
 
-`cli.py` exposes ten verbs; each is a thin dispatcher over the packages above.
+`cli.py` exposes eleven verbs; each is a thin dispatcher over the packages above.
 
 | Verb | Path through the engine |
 |---|---|
@@ -46,6 +46,7 @@ brandkit/
 | `learn` | `profile/overrides` distills cross-run `generation_report.json` history into an ADVISORY lesson (live only with `--accept`) |
 | `propose-overrides` | `profile/overrides` validates a model-authored proposal fail-closed (ADVISORY until `--accept`) |
 | `refine` | `profile/overrides` folds a model-authored refinement into the comprehension block (diff preview; `--accept` persists) |
+| `compare-profiles` | `profile/compare` diffs the BRAND-level facts of two saved profiles (read-only; exit 1 on drift) |
 | `list` | `profile/store` enumerates saved profiles per scope |
 | `doctor` | `doctor.probe()` reports what the environment can do |
 
